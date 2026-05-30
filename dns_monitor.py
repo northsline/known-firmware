@@ -1,5 +1,6 @@
 import socket
 import select
+import time
 
 class DNSMonitor:
     def __init__(self):
@@ -32,12 +33,13 @@ class DNSMonitor:
                         'domain': domain,
                         'timestamp': time.time()
                     }
-                    self.dns_requests.append(entry[-10:])
+                    self.dns_requests.append(entry)
+                    if len(self.dns_requests) > 10:
+                        self.dns_requests = self.dns_requests[-10:]
                     return entry
         return None
     
     def _parse_domain(self, data):
-
         try:
             offset = 12
             domain_parts = []
@@ -52,7 +54,7 @@ class DNSMonitor:
                     break
             
             return '.'.join(domain_parts) if domain_parts else None
-        except:
+        except Exception:
             return None
     
     def get_recent_requests(self):
