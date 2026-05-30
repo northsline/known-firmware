@@ -7,7 +7,9 @@ import machine
 import time
 from machine import Pin, I2C, SPI
 import ssd1306
-
+import wifi_config
+import dns_monitor
+import env
 
 OLED_SCL_PIN = 3
 OLED_SDA_PIN = 2
@@ -26,6 +28,9 @@ class KnownHardware:
         self.buzzer = self._init_buzzer()
         self.sd_card = self._init_sd_card()
         
+        self.wlan = None
+        self.ip_address = None
+        
         self._startup_sequence()
     
     def _init_oled(self):
@@ -36,17 +41,17 @@ class KnownHardware:
             devices = i2c.scan()
             
             if 0x3c in devices:
-                print("✓ OLED found at 0x3c. Initializing driver...")
+                print("OLED found at 0x3c. Initializing driver...")
                 oled = ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3c)
                 oled.fill(0)
                 oled.text("Known Online", 0, 0)
                 oled.show()
                 return oled
             else:
-                print("✗ OLED not detected on I2C Bus 1")
+                print("OLED not detected on I2C Bus 1")
                 return None
         except Exception as e:
-            print(f"✗ OLED initialization failed: {e}")
+            print(f"OLED initialization failed: {e}")
             return None
     
     def _init_buzzer(self):
@@ -55,10 +60,10 @@ class KnownHardware:
             buzzer = machine.PWM(Pin(BUZZER_PIN))
             buzzer.freq(1000)
             buzzer.duty_u16(0)
-            print("✓ Buzzer initialized")
+            print("Buzzer initialized")
             return buzzer
         except Exception as e:
-            print(f"✗ Buzzer init failed: {e}")
+            print(f"Buzzer init failed: {e}")
             return None
     
     def _init_sd_card(self):
@@ -69,11 +74,28 @@ class KnownHardware:
                       mosi=Pin(SD_MOSI_PIN), miso=Pin(SD_MISO_PIN))
             cs = Pin(SD_CS_PIN, Pin.OUT)
             cs.value(1)
-            print("✓ SD Card SPI initialized")
+            print("SD Card SPI initialized")
             return {"spi": spi, "cs": cs}
         except Exception as e:
-            print(f"✗ SD Card init failed: {e}")
+            print(f"SD Card init failed: {e}")
             return None
+    
+    def connect_to_wifi(self):
+        """Connect to WiFi network"""
+        print(f"Attempting to connect to {env.WIFI_SSID}")
+        self.wlan, self.ip_address = wifi_config.connect_wifi(
+            env.WIFI_SSID, 
+            env.WIFI_PASSWORD
+        )
+        
+        if self.wlan and self.ip_address:
+            if self.oled:
+                self.update_display("WiFi Connected", self.ip_address, "Ready")
+            return True
+        else:
+            if self.oled:
+                self.update_display("WiFi Failed", env.WIFI_SSID, "Retrying...")
+            return False
     
     def _startup_sequence(self):
         """Test each component with feedback"""
@@ -97,6 +119,19 @@ class KnownHardware:
             except Exception as e:
                 print(f"SD test error: {e}")
         
+        print("Connecting to WiFi...")
+        wifi_connected = self.connect_to_wifi()
+        
+        if wifi_connected:
+            print("Starting DNS monitor...")
+            self.dns_mon = dns_monitor.DNSMonitor()
+            if self.dns_mon.start_server():
+                print("DNS monitoring active")
+            else:
+                print("DNS monitor failed to start")
+        else:
+            print("Skipping DNS monitor - no WiFi")
+        
         print("Hardware test complete!\n")
 
     def update_display(self, line1="", line2="", line3=""):
@@ -116,17 +151,31 @@ if __name__ == "__main__":
     known_hw = KnownHardware()
     
     counter = 0
+    dns_check_interval = 0
+    
     while True:
         if known_hw.oled:
-            known_hw.update_display("Known v0.1", f"Up: {counter}s", "Status: OK")
-        else:
-            print(f"Running... {counter}s (no OLED)")
+            if known_hw.ip_address:
+                known_hw.update_display(
+                    "Known v0.1", 
+                    f"IP: {known_hw.ip_address}", 
+                    "Monitoring..."
+                )
+            else:
+                known_hw.update_display("Known v0.1", "No WiFi", "Retrying...")
         
-        if counter % 10 == 0 and counter > 0:
-            if known_hw.buzzer:
-                known_hw.buzzer.duty_u16(16384)
-                time.sleep_ms(100)
-                known_hw.buzzer.duty_u16(0)
+        if not known_hw.wlan or not known_hw.wlan.isconnected():
+            if counter % 30 == 0:
+                known_hw.connect_to_wifi()
+        
+        if hasattr(known_hw, 'dns_mon') and counter % 2 == 0:
+            dns_packet = known_hw.dns_mon.check_for_packets()
+            if dns_packet:
+                print(f"DNS Request: {dns_packet['domain']} from {dns_packet['source']}")
+                if known_hw.buzzer:
+                    known_hw.buzzer.duty_u16(16384)
+                    time.sleep_ms(50)
+                    known_hw.buzzer.duty_u16(0)
         
         counter += 1
         time.sleep(1)
