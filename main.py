@@ -1,27 +1,21 @@
-"""
-Known - Local DNS Privacy Monitor
-Phase 1: Component Testing & Integration
-"""
+# Known - Local DNS Privacy Monitor
 
 import machine
 import time
-from machine import Pin, I2C, SPI
+import network
+from machine import Pin, I2C
+
 import ssd1306
-import sdcard
-import os
-import wifi_config
+import provisioning
 import dns_monitor
-import env
 
 OLED_SCL_PIN = 3
 OLED_SDA_PIN = 2
 BUZZER_PIN = 15
-SD_MISO_PIN = 16
-SD_MOSI_PIN = 19
-SD_SCK_PIN = 18
-SD_CS_PIN = 17
 
 OLED_MAX_CHARS = 16
+WIFI_TIMEOUT_S = 10
+MDNS_HOSTNAME = "known"
 
 
 class KnownHardware:
@@ -31,7 +25,6 @@ class KnownHardware:
 
         self.oled = self._init_oled()
         self.buzzer = self._init_buzzer()
-        self.sd = self._init_sd_card()
 
         self.wlan = None
         self.ip_address = None
@@ -68,52 +61,43 @@ class KnownHardware:
             print(f"Buzzer init failed: {e}")
             return None
 
-    def _init_sd_card(self):
-        try:
-            spi = SPI(0, baudrate=1000000, polarity=0, phase=0, bits=8,
-                      firstbit=SPI.MSB, sck=Pin(SD_SCK_PIN),
-                      mosi=Pin(SD_MOSI_PIN), miso=Pin(SD_MISO_PIN))
-            cs = Pin(SD_CS_PIN, Pin.OUT)
-            sd = sdcard.SDCard(spi, cs)
-            vfs = os.VfsFat(sd)
-            os.mount(vfs, '/sd')
-            print("SD card mounted at /sd")
-            return sd
-        except Exception as e:
-            print(f"SD card init failed: {e}")
-            return None
-
-    def startup(self):
-        print("\n=== Known Hardware Test Sequence ===")
-
+    def beep(self, ms=50):
         if self.buzzer:
-            print("Testing buzzer...")
             self.buzzer.duty_u16(16384)
-            time.sleep(0.2)
+            time.sleep_ms(ms)
             self.buzzer.duty_u16(0)
-            time.sleep(0.1)
 
-        print("Connecting to WiFi...")
-        self.connect_to_wifi()
+    def connect_to_wifi(self, ssid, password):
+        print(f"Attempting to connect to {ssid}")
+        self.wlan = network.WLAN(network.STA_IF)
+        self.wlan.active(True)
 
-        print("Hardware test complete!\n")
+        if not self.wlan.isconnected():
+            self.wlan.connect(ssid, password)
+            start = time.time()
+            while not self.wlan.isconnected() and (time.time() - start) < WIFI_TIMEOUT_S:
+                time.sleep(0.1)
 
-    def connect_to_wifi(self):
-        print(f"Attempting to connect to {env.WIFI_SSID}")
-        self.wlan, self.ip_address = wifi_config.connect_wifi(
-            env.WIFI_SSID,
-            env.WIFI_PASSWORD
-        )
-
-        if self.wlan and self.ip_address:
+        if self.wlan.isconnected():
+            self.ip_address = self.wlan.ifconfig()[0]
+            print(f"WiFi connected. IP: {self.ip_address}")
+            self._start_mdns()
             if self.oled:
                 self.update_display("WiFi Connected", self.ip_address, "Ready")
             self._start_dns_monitor()
             return True
         else:
+            print("WiFi connection failed")
             if self.oled:
-                self.update_display("WiFi Failed", env.WIFI_SSID[:OLED_MAX_CHARS], "Retrying...")
+                self.update_display("WiFi Failed", str(ssid)[:OLED_MAX_CHARS], "Retrying...")
             return False
+
+    def _start_mdns(self):
+        try:
+            network.hostname(MDNS_HOSTNAME)
+            print(f"mDNS hostname set: {MDNS_HOSTNAME}.local")
+        except Exception as e:
+            print(f"mDNS setup skipped: {e}")
 
     def _start_dns_monitor(self):
         if self.dns_mon is None:
@@ -135,36 +119,48 @@ class KnownHardware:
                 print(f"Display update error: {e}")
 
 
-if __name__ == "__main__":
+def run():
     print("Starting Known firmware...")
-    known_hw = KnownHardware()
-    known_hw.startup()
+    hw = KnownHardware()
+    hw.beep(200)
+
+    if not provisioning.is_provisioned():
+        if hw.oled:
+            hw.update_display("Known Setup", "Plug into PC", "Open the app")
+        provisioning.enter_provisioning_mode()
+        print("Rebooting after provisioning...")
+        time.sleep(1)
+        machine.reset()
+        return
+
+    cfg = provisioning.load_config()
+    hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
 
     counter = 0
-
     while True:
-        if known_hw.oled:
-            if known_hw.ip_address:
-                known_hw.update_display(
+        if hw.oled:
+            if hw.ip_address:
+                hw.update_display(
                     "Known v0.1",
-                    f"IP:{known_hw.ip_address}"[:OLED_MAX_CHARS],
-                    "Monitoring..."
+                    f"IP:{hw.ip_address}"[:OLED_MAX_CHARS],
+                    "Monitoring...",
                 )
             else:
-                known_hw.update_display("Known v0.1", "No WiFi", "Retrying...")
+                hw.update_display("Known v0.1", "No WiFi", "Retrying...")
 
-        if not known_hw.wlan or not known_hw.wlan.isconnected():
+        if not hw.wlan or not hw.wlan.isconnected():
             if counter % 30 == 0:
-                known_hw.connect_to_wifi()
+                hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
 
-        if known_hw.dns_mon and counter % 2 == 0:
-            dns_packet = known_hw.dns_mon.check_for_packets()
+        if hw.dns_mon:
+            dns_packet = hw.dns_mon.check_for_packets()
             if dns_packet:
                 print(f"DNS Request: {dns_packet['domain']} from {dns_packet['source']}")
-                if known_hw.buzzer:
-                    known_hw.buzzer.duty_u16(16384)
-                    time.sleep_ms(50)
-                    known_hw.buzzer.duty_u16(0)
+                hw.beep(50)
 
         counter += 1
         time.sleep(1)
+
+
+if __name__ == "__main__":
+    run()

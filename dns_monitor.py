@@ -2,7 +2,11 @@ import socket
 import select
 import time
 
-_MAX_REQUESTS = 10
+_MAX_REQUESTS = 150
+UPSTREAM_DNS = "1.1.1.1"
+UPSTREAM_PORT = 53
+FORWARD_TIMEOUT = 3
+
 
 class DNSMonitor:
     def __init__(self):
@@ -32,37 +36,54 @@ class DNSMonitor:
             return None
 
         ready = select.select([self.sock], [], [], 0)
-        if ready[0]:
-            data, addr = self.sock.recvfrom(1024)
-            if len(data) >= 12:
-                domain = self._parse_domain(data)
-                if domain:
-                    entry = {
-                        'source': addr[0],
-                        'domain': domain,
-                        'timestamp': time.time()
-                    }
-                    self.dns_requests.append(entry)
-                    if len(self.dns_requests) > _MAX_REQUESTS:
-                        self.dns_requests = self.dns_requests[-_MAX_REQUESTS:]
-                    return entry
+        if not ready[0]:
+            return None
+
+        data, addr = self.sock.recvfrom(512)
+        if len(data) < 12:
+            return None
+
+        domain = self._parse_domain(data)
+        self._forward_query(data, addr)
+
+        if domain:
+            entry = {
+                'source': addr[0],
+                'domain': domain,
+                'timestamp': time.time()
+            }
+            self.dns_requests.append(entry)
+            if len(self.dns_requests) > _MAX_REQUESTS:
+                self.dns_requests = self.dns_requests[-_MAX_REQUESTS:]
+            return entry
+
         return None
+
+    def _forward_query(self, data, client_addr):
+        upstream = None
+        try:
+            upstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            upstream.settimeout(FORWARD_TIMEOUT)
+            upstream.sendto(data, (UPSTREAM_DNS, UPSTREAM_PORT))
+            response, _ = upstream.recvfrom(512)
+            self.sock.sendto(response, client_addr)
+        except Exception as e:
+            print(f"Forward error: {e}")
+        finally:
+            if upstream:
+                upstream.close()
 
     def _parse_domain(self, data):
         try:
             offset = 12
-            domain_parts = []
-
+            parts = []
             while offset < len(data) and data[offset] != 0:
                 length = data[offset]
-                if offset + length + 1 <= len(data):
-                    part = data[offset+1:offset+1+length].decode('utf-8', errors='ignore')
-                    domain_parts.append(part)
-                    offset += length + 1
-                else:
+                if offset + length + 1 > len(data):
                     break
-
-            return '.'.join(domain_parts) if domain_parts else None
+                parts.append(data[offset + 1:offset + 1 + length].decode('utf-8', errors='ignore'))
+                offset += length + 1
+            return '.'.join(parts) if parts else None
         except Exception:
             return None
 
