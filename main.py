@@ -131,7 +131,11 @@ class KnownHardware:
                 print(f"Display update error: {e}")
 
 
+hw = None
+
+
 def run():
+    global hw
     print("Starting Known firmware...")
     hw = KnownHardware()
     hw.beep(200)
