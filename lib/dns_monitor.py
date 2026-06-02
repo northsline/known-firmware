@@ -9,9 +9,10 @@ FORWARD_TIMEOUT = 3
 
 
 class DNSMonitor:
-    def __init__(self):
+    def __init__(self, device_tracker=None):
         self.sock = None
         self.dns_requests = []
+        self.device_tracker = device_tracker
 
     def start_server(self):
         if self.sock:
@@ -55,6 +56,10 @@ class DNSMonitor:
             self.dns_requests.append(entry)
             if len(self.dns_requests) > _MAX_REQUESTS:
                 self.dns_requests = self.dns_requests[-_MAX_REQUESTS:]
+            if self.device_tracker:
+                self.device_tracker.record(
+                    entry['source'], entry['domain'], entry['timestamp']
+                )
             return entry
 
         return None
