@@ -8,6 +8,8 @@ from machine import Pin, I2C
 import ssd1306
 import provisioning
 import dns_monitor
+import devices
+import http_server
 
 OLED_SCL_PIN = 3
 OLED_SDA_PIN = 2
@@ -28,7 +30,9 @@ class KnownHardware:
 
         self.wlan = None
         self.ip_address = None
+        self.device_tracker = devices.DeviceTracker()
         self.dns_mon = None
+        self.http = None
 
     def _init_oled(self):
         try:
@@ -101,11 +105,19 @@ class KnownHardware:
 
     def _start_dns_monitor(self):
         if self.dns_mon is None:
-            self.dns_mon = dns_monitor.DNSMonitor()
+            self.dns_mon = dns_monitor.DNSMonitor(device_tracker=self.device_tracker)
         if self.dns_mon.start_server():
             print("DNS monitoring active")
         else:
             print("DNS monitor failed to start")
+        self._start_http_server()
+
+    def _start_http_server(self):
+        if self.http is None:
+            self.http = http_server.HTTPServer(
+                self.dns_mon, self.device_tracker, port=8080
+            )
+        self.http.start()
 
     def update_display(self, line1="", line2="", line3=""):
         if self.oled:
@@ -136,9 +148,24 @@ def run():
     cfg = provisioning.load_config()
     hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
 
-    counter = 0
+    last_oled_update = 0
+    last_wifi_check = 0
     while True:
-        if hw.oled:
+        now = time.ticks_ms()
+
+        # DNS: drain quickly so we stay responsive to traffic.
+        if hw.dns_mon:
+            dns_packet = hw.dns_mon.check_for_packets()
+            if dns_packet:
+                print(f"DNS Request: {dns_packet['domain']} from {dns_packet['source']}")
+                hw.beep(50)
+
+        # HTTP API: non-blocking, serve at most one connection per pass.
+        if hw.http:
+            hw.http.poll()
+
+        # OLED: refresh once a second.
+        if time.ticks_diff(now, last_oled_update) >= 1000:
             if hw.ip_address:
                 hw.update_display(
                     "Known v0.1",
@@ -147,19 +174,15 @@ def run():
                 )
             else:
                 hw.update_display("Known v0.1", "No WiFi", "Retrying...")
+            last_oled_update = now
 
-        if not hw.wlan or not hw.wlan.isconnected():
-            if counter % 30 == 0:
+        # Wi-Fi reconnect: check every 30 seconds.
+        if time.ticks_diff(now, last_wifi_check) >= 30000:
+            if not hw.wlan or not hw.wlan.isconnected():
                 hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
+            last_wifi_check = now
 
-        if hw.dns_mon:
-            dns_packet = hw.dns_mon.check_for_packets()
-            if dns_packet:
-                print(f"DNS Request: {dns_packet['domain']} from {dns_packet['source']}")
-                hw.beep(50)
-
-        counter += 1
-        time.sleep(1)
+        time.sleep_ms(100)
 
 
 if __name__ == "__main__":
