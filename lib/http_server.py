@@ -11,6 +11,7 @@ Routes:
     GET    /audit/weekly?since=<ts>&limit=<n>
     GET    /devices
     GET    /stats
+    GET    /debug
     GET    /allowlist
     PUT    /allowlist            body {"pattern": "..."}
     DELETE /allowlist/<id>
@@ -53,7 +54,7 @@ class HTTPServer:
         self.device_tracker = device_tracker
         self.port = port
         self.sock = None
-        self.allowlist = []  # list of {"id", "pattern", "created_at"}
+        self.allowlist = []
 
     def start(self):
         if self.sock:
@@ -104,15 +105,24 @@ class HTTPServer:
     # --- request handling -------------------------------------------------
 
     def _read_request(self, client):
-        """Read what's immediately available, up to _MAX_REQUEST_BYTES."""
-        # Give a slow client a brief moment, but never hang the loop.
-        ready = select.select([client], [], [], 0.05)
-        if not ready[0]:
-            return b""
-        try:
-            return client.recv(_MAX_REQUEST_BYTES)
-        except OSError:
-            return b""
+        """Read request data, retrying briefly for non-blocking sockets."""
+        data = b""
+        start = time.ticks_ms()
+        while time.ticks_diff(time.ticks_ms(), start) < 250:
+            try:
+                chunk = client.recv(_MAX_REQUEST_BYTES - len(data))
+                if chunk:
+                    data += chunk
+                    # Complete HTTP request header section ends with \r\n\r\n
+                    if b"\r\n\r\n" in data:
+                        return data
+                elif data:
+                    # Empty chunk but we already have some data
+                    return data
+            except OSError:
+                pass
+            time.sleep_ms(5)
+        return data
 
     def _handle_client(self, client):
         raw = self._read_request(client)
@@ -167,6 +177,8 @@ class HTTPServer:
             self._safe_send(client, 200, self.device_tracker.get_all())
         elif method == "GET" and base == "/stats":
             self._stats(client)
+        elif method == "GET" and base == "/debug":
+            self._debug(client)
         elif method == "GET" and base == "/allowlist":
             self._safe_send(client, 200, self.allowlist)
         elif method == "PUT" and base == "/allowlist":
@@ -230,6 +242,24 @@ class HTTPServer:
             domains[r["domain"]] = True
         stats["unique_domains"] = len(domains)
         self._safe_send(client, 200, stats)
+
+    def _debug(self, client):
+        """Raw internal state for diagnosing empty-log problem."""
+        reqs = self.dns_monitor.dns_requests
+        devs = self.device_tracker.devices
+        payload = {
+            "dns_requests": {
+                "count": len(reqs),
+                "last_5": reqs[-5:],
+            },
+            "device_tracker": {
+                "device_count": len(devs),
+                "devices": list(devs.values()),
+            },
+            "dns_last_error": getattr(self.dns_monitor, "last_error", None),
+            "dns_sock_bound": self.dns_monitor.sock is not None,
+        }
+        self._safe_send(client, 200, payload)
 
     def _allowlist_add(self, client, body):
         if not isinstance(body, dict) or "pattern" not in body:

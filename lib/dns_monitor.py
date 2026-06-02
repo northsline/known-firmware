@@ -13,6 +13,7 @@ class DNSMonitor:
         self.sock = None
         self.dns_requests = []
         self.device_tracker = device_tracker
+        self.last_error = None  # surfaced via /debug
 
     def start_server(self):
         if self.sock:
@@ -24,6 +25,7 @@ class DNSMonitor:
             print("DNS monitor started on port 53")
             return True
         except Exception as e:
+            self.last_error = "bind: {}".format(e)
             print(f"DNS server failed: {e}")
             return False
 
@@ -41,10 +43,16 @@ class DNSMonitor:
             return None
 
         data, addr = self.sock.recvfrom(512)
+        print("[dns] check_for_packets: {} bytes from {}".format(len(data), addr))
         if len(data) < 12:
+            print("[dns] dropped: packet too short ({} bytes)".format(len(data)))
             return None
 
         domain = self._parse_domain(data)
+        if domain:
+            print("[dns] _parse_domain OK: {}".format(domain))
+        else:
+            print("[dns] _parse_domain FAILED for {}-byte packet".format(len(data)))
         self._forward_query(data, addr)
 
         if domain:
@@ -54,6 +62,8 @@ class DNSMonitor:
                 'timestamp': time.time()
             }
             self.dns_requests.append(entry)
+            print("[dns] appended entry, dns_requests len now {}".format(
+                len(self.dns_requests)))
             if len(self.dns_requests) > _MAX_REQUESTS:
                 self.dns_requests = self.dns_requests[-_MAX_REQUESTS:]
             if self.device_tracker:
@@ -73,6 +83,7 @@ class DNSMonitor:
             response, _ = upstream.recvfrom(512)
             self.sock.sendto(response, client_addr)
         except Exception as e:
+            self.last_error = "forward: {}".format(e)
             print(f"Forward error: {e}")
         finally:
             if upstream:
@@ -86,10 +97,11 @@ class DNSMonitor:
                 length = data[offset]
                 if offset + length + 1 > len(data):
                     break
-                parts.append(data[offset + 1:offset + 1 + length].decode('utf-8', errors='ignore'))
+                parts.append(data[offset + 1:offset + 1 + length].decode('utf-8', 'ignore'))
                 offset += length + 1
             return '.'.join(parts) if parts else None
-        except Exception:
+        except Exception as e:
+            self.last_error = "parse: {}".format(e)
             return None
 
     def get_recent_requests(self):
