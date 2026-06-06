@@ -1,4 +1,5 @@
 # Known - Local DNS Privacy Monitor
+# For the breadboard layout and build instructions, see the docs repo on our profile.
 
 import machine
 import time
