@@ -3,14 +3,6 @@
 
 import machine
 import time
-import network
-from machine import Pin, I2C
-
-import ssd1306
-import provisioning
-import dns_monitor
-import devices
-import http_server
 
 OLED_SCL_PIN = 3
 OLED_SDA_PIN = 2
@@ -21,10 +13,33 @@ WIFI_TIMEOUT_S = 10
 MDNS_HOSTNAME = "known"
 
 
+def _show_provisioning_oled():
+    """Quick setup screen so the user knows the device is alive."""
+    try:
+        from machine import Pin, I2C
+        import ssd1306
+
+        i2c = I2C(1, scl=Pin(OLED_SCL_PIN), sda=Pin(OLED_SDA_PIN), freq=400000)
+        if 0x3C not in i2c.scan():
+            print("OLED not detected on I2C bus")
+            return
+        oled = ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3C)
+        oled.fill(0)
+        oled.text("Known Setup", 0, 0)
+        oled.text("Plug into PC", 0, 16)
+        oled.text("Open the app", 0, 32)
+        oled.show()
+        print("OLED: setup screen shown")
+    except Exception as e:
+        print("OLED setup screen skipped:", e)
+
+
 class KnownHardware:
     def __init__(self):
+        import devices
+
         self.pico_id = machine.unique_id()
-        print(f"Known Device ID: {self.pico_id.hex()}\n")
+        print("Known Device ID:", self.pico_id.hex())
 
         self.oled = self._init_oled()
         self.buzzer = self._init_buzzer()
@@ -37,33 +52,37 @@ class KnownHardware:
 
     def _init_oled(self):
         try:
+            from machine import Pin, I2C
+            import ssd1306
+
             print("Initializing I2C Bus 1...")
             i2c = I2C(1, scl=Pin(OLED_SCL_PIN), sda=Pin(OLED_SDA_PIN), freq=400000)
-            devices = i2c.scan()
+            found = i2c.scan()
 
-            if 0x3c in devices:
+            if 0x3C in found:
                 print("OLED found at 0x3c. Initializing driver...")
-                oled = ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3c)
+                oled = ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3C)
                 oled.fill(0)
                 oled.text("Known Online", 0, 0)
                 oled.show()
                 return oled
-            else:
-                print("OLED not detected on I2C Bus 1")
-                return None
+            print("OLED not detected on I2C Bus 1")
+            return None
         except Exception as e:
-            print(f"OLED initialization failed: {e}")
+            print("OLED initialization failed:", e)
             return None
 
     def _init_buzzer(self):
         try:
+            from machine import Pin
+
             buzzer = machine.PWM(Pin(BUZZER_PIN))
             buzzer.freq(1000)
             buzzer.duty_u16(0)
             print("Buzzer initialized")
             return buzzer
         except Exception as e:
-            print(f"Buzzer init failed: {e}")
+            print("Buzzer init failed:", e)
             return None
 
     def beep(self, ms=50):
@@ -73,7 +92,9 @@ class KnownHardware:
             self.buzzer.duty_u16(0)
 
     def connect_to_wifi(self, ssid, password):
-        print(f"Attempting to connect to {ssid}")
+        import network
+
+        print("Attempting to connect to", ssid)
         self.wlan = network.WLAN(network.STA_IF)
         self.wlan.active(True)
 
@@ -85,35 +106,40 @@ class KnownHardware:
 
         if self.wlan.isconnected():
             self.ip_address = self.wlan.ifconfig()[0]
-            print(f"WiFi connected. IP: {self.ip_address}")
+            print("WiFi connected. IP:", self.ip_address)
             self._start_mdns()
             if self.oled:
                 self.update_display("WiFi Connected", self.ip_address, "Ready")
             self._start_dns_monitor()
             return True
-        else:
-            print("WiFi connection failed")
-            if self.oled:
-                self.update_display("WiFi Failed", str(ssid)[:OLED_MAX_CHARS], "Retrying...")
-            return False
+
+        print("WiFi connection failed")
+        if self.oled:
+            self.update_display("WiFi Failed", str(ssid)[:OLED_MAX_CHARS], "Retrying...")
+        return False
 
     def _start_mdns(self):
+        import network
+
         try:
             network.hostname(MDNS_HOSTNAME)
-            print(f"mDNS hostname set: {MDNS_HOSTNAME}.local")
+            print("mDNS hostname set:", MDNS_HOSTNAME + ".local")
         except Exception as e:
-            print(f"mDNS setup skipped: {e}")
+            print("mDNS setup skipped:", e)
 
     def _start_dns_monitor(self):
+        import dns_monitor
+        import http_server
+
         if self.dns_mon is None:
             self.dns_mon = dns_monitor.DNSMonitor(device_tracker=self.device_tracker)
         if self.dns_mon.start_server():
             print("DNS monitoring active")
         else:
             print("DNS monitor failed to start")
-        self._start_http_server()
+        self._start_http_server(http_server)
 
-    def _start_http_server(self):
+    def _start_http_server(self, http_server):
         if self.http is None:
             self.http = http_server.HTTPServer(
                 self.dns_mon, self.device_tracker, port=8080
@@ -129,7 +155,7 @@ class KnownHardware:
                 self.oled.text(line3[:OLED_MAX_CHARS], 0, 32)
                 self.oled.show()
             except Exception as e:
-                print(f"Display update error: {e}")
+                print("Display update error:", e)
 
 
 hw = None
@@ -137,18 +163,23 @@ hw = None
 
 def run():
     global hw
+
+    # Only provisioning is required for first-time USB setup. Import the rest
+    # after Wi-Fi credentials exist so a partial lib/ copy cannot brick setup.
+    import provisioning
+
     print("Starting Known firmware...")
-    hw = KnownHardware()
-    hw.beep(200)
 
     if not provisioning.is_provisioned():
-        if hw.oled:
-            hw.update_display("Known Setup", "Plug into PC", "Open the app")
+        # Serial first — OLED/I2C init can delay USB command handling.
         provisioning.enter_provisioning_mode()
         print("Rebooting after provisioning...")
         time.sleep(1)
         machine.reset()
         return
+
+    hw = KnownHardware()
+    hw.beep(200)
 
     cfg = provisioning.load_config()
     hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
@@ -158,30 +189,26 @@ def run():
     while True:
         now = time.ticks_ms()
 
-        # DNS: drain quickly so we stay responsive to traffic.
         if hw.dns_mon:
             dns_packet = hw.dns_mon.check_for_packets()
             if dns_packet:
-                print(f"DNS Request: {dns_packet['domain']} from {dns_packet['source']}")
+                print("DNS Request:", dns_packet["domain"], "from", dns_packet["source"])
                 hw.beep(50)
 
-        # HTTP API: non-blocking, serve at most one connection per pass.
         if hw.http:
             hw.http.poll()
 
-        # OLED: refresh once a second.
         if time.ticks_diff(now, last_oled_update) >= 1000:
             if hw.ip_address:
                 hw.update_display(
                     "Known v0.1",
-                    f"IP:{hw.ip_address}"[:OLED_MAX_CHARS],
+                    ("IP:" + hw.ip_address)[:OLED_MAX_CHARS],
                     "Monitoring...",
                 )
             else:
                 hw.update_display("Known v0.1", "No WiFi", "Retrying...")
             last_oled_update = now
 
-        # Wi-Fi reconnect: check every 30 seconds.
         if time.ticks_diff(now, last_wifi_check) >= 30000:
             if not hw.wlan or not hw.wlan.isconnected():
                 hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
