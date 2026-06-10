@@ -171,6 +171,8 @@ def run():
     print("Starting Known firmware...")
 
     if not provisioning.is_provisioned():
+        # Show setup screen so user knows device is alive before serial
+        _show_provisioning_oled()
         # Serial first — OLED/I2C init can delay USB command handling.
         provisioning.enter_provisioning_mode()
         print("Rebooting after provisioning...")
