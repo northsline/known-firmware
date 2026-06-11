@@ -250,11 +250,15 @@ def run():
         if hw.http:
             hw.http.poll()
 
-        if time.ticks_diff(now, last_oled_update) >= 1000:
+        if time.ticks_diff(now, last_oled_update) >= 10000:
             if hw.ip_address:
+                # Get DNS query count
+                query_count = 0
+                if hw.dns_mon and hw.dns_mon.dns_requests:
+                    query_count = len(hw.dns_mon.dns_requests)
                 hw.update_display(
                     "Known v0.1",
-                    ("IP:" + hw.ip_address)[:OLED_MAX_CHARS],
+                    ("Queries: " + str(query_count))[:OLED_MAX_CHARS],
                     "Monitoring...",
                 )
             else:
