@@ -9,7 +9,7 @@ OLED_SDA_PIN = 2
 BUZZER_PIN = 15
 
 OLED_MAX_CHARS = 16
-WIFI_TIMEOUT_S = 10
+WIFI_TIMEOUT_S = 30
 MDNS_HOSTNAME = "known"
 
 
@@ -25,7 +25,7 @@ def _show_provisioning_oled():
             return
         oled = ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3C)
         oled.fill(0)
-        oled.text("Known Setup", 0, 0)
+        oled.text("Setup", 0, 0)
         oled.text("Plug into PC", 0, 16)
         oled.text("Open the app", 0, 32)
         oled.show()
@@ -95,17 +95,54 @@ class KnownHardware:
         import network
 
         print("Attempting to connect to", ssid)
+        
+        # First, scan for networks to see what's available
+        print("Scanning for networks...")
+        wlan_temp = network.WLAN(network.STA_IF)
+        wlan_temp.active(True)
+        networks = wlan_temp.scan()
+        print("Networks found:", len(networks))
+        for n in networks:
+            print(" -", n[0].decode(), "RSSI:", n[3], "sec:", n[5])
+        
         self.wlan = network.WLAN(network.STA_IF)
         self.wlan.active(True)
 
         if not self.wlan.isconnected():
             self.wlan.connect(ssid, password)
+            # Wait for association first (this can take time on weak signals)
+            print("Waiting for association...")
             start = time.time()
-            while not self.wlan.isconnected() and (time.time() - start) < WIFI_TIMEOUT_S:
-                time.sleep(0.1)
+            while not self.wlan.isconnected():
+                time.sleep(0.5)
+                status = self.wlan.status()
+                print("  status:", status, "-", self._wifi_status_name(status))
+                if time.time() - start > WIFI_TIMEOUT_S:
+                    break
+                # Check if we're in a failed state
+                if status == network.STAT_WRONG_PASSWORD:
+                    print("WiFi: wrong password")
+                    return False
+                elif status == network.STAT_NO_AP_FOUND:
+                    print("WiFi: no AP found")
+                    return False
+                elif status == network.STAT_CONNECT_FAIL:
+                    print("WiFi: connect failed")
+                    return False
+
+            # Now wait for IP assignment
+            if self.wlan.isconnected():
+                print("Associated, waiting for IP...")
+                start = time.time()
+                while not self.ip_address and (time.time() - start) < 10:
+                    time.sleep(0.2)
+                    self.ip_address = self.wlan.ifconfig()[0]
+                    if self.ip_address == '0.0.0.0':
+                        self.ip_address = None
 
         if self.wlan.isconnected():
-            self.ip_address = self.wlan.ifconfig()[0]
+            if not self.ip_address:
+                self.ip_address = self.wlan.ifconfig()[0]
             print("WiFi connected. IP:", self.ip_address)
             self._start_mdns()
             if self.oled:
@@ -117,6 +154,19 @@ class KnownHardware:
         if self.oled:
             self.update_display("WiFi Failed", str(ssid)[:OLED_MAX_CHARS], "Retrying...")
         return False
+
+    def _wifi_status_name(self, status):
+        """Return human-readable WiFi status."""
+        # Hardcoded status values (MicroPython STAT_* constants)
+        statuses = {
+            0: "IDLE",
+            1: "CONNECTING", 
+            2: "WRONG_PASSWORD",
+            3: "NO_AP_FOUND",
+            4: "CONNECT_FAIL",
+            5: "GOT_IP",
+        }
+        return statuses.get(status, "UNKNOWN(" + str(status) + ")")
 
     def _start_mdns(self):
         import network
