@@ -1,5 +1,7 @@
 # Known - Local DNS Privacy Monitor
-# For the breadboard layout and build instructions, see the docs repo on our profile.
+# This runs on the Raspberry Pi Pico 2 W.
+# It listens for DNS queries from your devices, logs them, and forwards them to a real DNS server.
+# The dashboard shows you what's happening on your network.
 
 import machine
 import time
@@ -35,6 +37,11 @@ def _show_provisioning_oled():
 
 
 class KnownHardware:
+    """Hardware control for Known.
+
+    Handles WiFi connection, OLED display, buzzer, and runs the main loop.
+    """
+    
     def __init__(self):
         import devices
 
