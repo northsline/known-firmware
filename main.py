@@ -46,6 +46,7 @@ class KnownHardware:
 
         self.wlan = None
         self.ip_address = None
+        self.was_connected = False
         self.device_tracker = devices.DeviceTracker()
         self.dns_mon = None
         self.http = None
@@ -144,6 +145,7 @@ class KnownHardware:
             if not self.ip_address:
                 self.ip_address = self.wlan.ifconfig()[0]
             print("WiFi connected. IP:", self.ip_address)
+            self.was_connected = True
             self._start_mdns()
             if self.oled:
                 self.update_display("WiFi Connected", self.ip_address, "Ready")
@@ -261,6 +263,8 @@ def run():
                     ("Queries: " + str(query_count))[:OLED_MAX_CHARS],
                     "Monitoring...",
                 )
+            elif hw.was_connected:
+                hw.update_display("WiFi Lost", "Retrying...", "")
             else:
                 hw.update_display("Known v0.1", "No WiFi", "Retrying...")
             last_oled_update = now
@@ -269,6 +273,12 @@ def run():
             if not hw.wlan or not hw.wlan.isconnected():
                 hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
             last_wifi_check = now
+
+        # Immediate reconnect if we lost connection (debounced)
+        if hw.was_connected and (not hw.wlan or not hw.wlan.isconnected()):
+            if time.ticks_diff(now, last_wifi_check) >= 5000:
+                hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
+                last_wifi_check = now
 
         time.sleep_ms(100)
 
