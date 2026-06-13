@@ -1,39 +1,3 @@
-"""
-DNS diagnostic harness for the Pico 2 W.
-
-Upload this file to the Pico (e.g. via mpremote) and run:
-
-    >>> from lib.dns_diag import run
-    >>> run(my_ip="192.168.1.50")
-
-Replace my_ip with the IP the Pico is actually using (printed at boot
-or visible on the OLED). The script will print PASS/FAIL for each of
-four tests so you can see exactly which link in the chain is broken.
-
-Tests, in order:
-
-  T1 listen      can we bind and recv a packet on 0.0.0.0:53?
-  T2 echo        if T1 passes, does nslookup-style traffic reach us?
-                 run an "echo server" that mirrors each packet back to
-                 the sender. From a PC on the same wifi do
-                    nslookup google.com <pico_ip>
-                 and watch the serial output.
-  T3 upstream    can the Pico reach 1.1.1.1:53 and get a real DNS
-                 reply? this catches router firewalls, captive
-                 portals, and APs that block outbound DNS to anyone
-                 but themselves.
-  T4 forward     end-to-end: listen + upstream + relay. this is the
-                 one that matters.
-
-Notes
------
-* Runs on the live network. If T1 fails the test aborts - nothing
-  else will work.
-* T2 leaves a 30s server up. Hit Ctrl-C in the REPL to bail early.
-* Uses the same patterns as lib/dns_monitor.py (non-blocking,
-  select.poll) so a pass here means the real monitor should too.
-"""
-
 import socket
 import select
 import time
@@ -49,47 +13,37 @@ def _log(tag, msg):
 
 
 def test_listen(bind_ip="0.0.0.0", port=53, wait_s=8):
-    """T1: bind to 0.0.0.0:53, wait for a packet, return it."""
+    # T1 — just bind and wait. if nothing comes in, the network path is broken.
     _log("T1", "binding {}:{} ...".format(bind_ip, port))
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.bind((bind_ip, port))
-        s.settimeout(1)  # so we can check wall clock each second
+        s.settimeout(wait_s)   # one long timeout, not a tight loop
     except Exception as e:
         _log("T1", "FAIL bind: {}".format(e))
         return None, None
 
     _log("T1", "bound. waiting up to {}s for any packet ...".format(wait_s))
-    deadline = _now_ms() + wait_s * 1000
-    last_print = 0
-    while time.ticks_diff(deadline, _now_ms()) > 0:
-        try:
-            data, addr = s.recvfrom(512)
-        except Exception:
-            data = None
+    try:
+        data, addr = s.recvfrom(512)
         if data:
             _log("T1", "PASS got {}B from {}".format(len(data), addr))
             s.close()
             return data, addr
-        # Periodic "still alive" so the user knows it's not hung.
-        if time.ticks_diff(_now_ms(), last_print) >= 2000:
-            _log("T1", "  ...still waiting")
-            last_print = _now_ms()
+    except OSError as e:
+        _log("T1", "FAIL recvfrom: {}".format(e))
+    except Exception as e:
+        _log("T1", "FAIL unexpected: {}".format(e))
+    finally:
+        s.close()
+
     _log("T1", "FAIL no packet in {}s".format(wait_s))
-    s.close()
     return None, None
 
 
 def test_echo(bind_ip="0.0.0.0", port=53, wait_s=30):
-    """T2: echo every received packet back to its sender.
-
-    From a PC on the same wifi, run:
-        nslookup google.com <pico_ip>
-    and watch the serial console. If you see the query come in and
-    the response go out, the basic UDP path is good. If you see
-    nothing come in even though the PC says it sent it, the issue
-    is AP isolation or a wrong IP - not the firmware.
-    """
+    # T2 — echo server. run nslookup from a pc and see if the pico gets it.
+    # if nothing shows up, it's AP isolation or wrong IP, not the firmware.
     _log("T2", "starting echo server on {}:{} for {}s".format(
         bind_ip, port, wait_s))
     try:
@@ -122,10 +76,8 @@ def test_echo(bind_ip="0.0.0.0", port=53, wait_s=30):
 
 
 def test_upstream(host="1.1.1.1", port=53, timeout_s=5):
-    """T3: send a real DNS query for cloudflare.com and see if we
-    get a real answer back. failure here means the router/firewall
-    is blocking outbound DNS to public resolvers.
-    """
+    # T3 — send a real query to 1.1.1.1. if this fails, the router is
+    # blocking outbound DNS to public resolvers.
     # Hand-crafted DNS query for "cloudflare.com" A record.
     # Header: id=0x1234, RD=1, 1 question.
     # \x12\x34   txid
@@ -169,15 +121,9 @@ def test_upstream(host="1.1.1.1", port=53, timeout_s=5):
 
 
 def test_forward(pico_ip, peer_hint=None, wait_s=20):
-    """T4: end-to-end. bind 53, recv from a peer, forward to
-    1.1.1.1, send the answer back. polls an upstream socket via
-    select just like the real dns_monitor does.
-
-    The packet source needs to come from somewhere. Options:
-    - run this while doing nslookup from a PC on the same wifi
-    - or, if peer_hint is given, the test will send a probe query
-      *to itself* on 127.0.0.1 to exercise the path
-    """
+    # T4 — full forwarder. bind 53, recv, forward to 1.1.1.1, send answer back.
+    # uses select() on the upstream socket, same pattern as dns_monitor.
+    # run nslookup from a pc during this, or pass peer_hint to self-probe.
     _log("T4", "starting forwarder on {}:53 for {}s".format(pico_ip, wait_s))
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -259,7 +205,7 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
 
 
 def run(my_ip):
-    """Run the full diagnostic. Pass my_ip = the Pico's IP."""
+    # run the full diagnostic. pass the pico's IP.
     print("==== Known DNS diagnostic ====")
     print("Pico IP: {}".format(my_ip))
     print()

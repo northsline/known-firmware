@@ -1,22 +1,6 @@
-"""
-Known - minimal non-blocking HTTP API server
-
-Serves JSON to the local dashboard on port 8080. Single-threaded and
-non-blocking: poll() is called from the main loop, accepts at most one pending
-connection per call, reads what's immediately available (up to 1 KB), answers,
-and closes. No keep-alive, no threading, raw sockets only - MicroPython safe.
-
-Routes:
-    GET    /health
-    GET    /audit/weekly?since=<ts>&limit=<n>
-    GET    /devices
-    GET    /stats
-    GET    /debug
-    GET    /allowlist
-    PUT    /allowlist            body {"pattern": "..."}
-    DELETE /allowlist/<id>
-    OPTIONS *                    CORS preflight (204)
-"""
+# minimal non-blocking http server on port 8080.
+# raw sockets, no keep-alive, no threads — micropython safe.
+# poll() is called from the main loop, handles one connection per tick.
 
 import socket
 import select
@@ -78,7 +62,7 @@ class HTTPServer:
             self.sock = None
 
     def poll(self):
-        """Accept and serve at most one pending connection. Never blocks."""
+        # accept and serve one pending connection. never blocks.
         if not self.sock:
             return
 
@@ -105,7 +89,7 @@ class HTTPServer:
     # --- request handling -------------------------------------------------
 
     def _read_request(self, client):
-        """Read request data, retrying briefly for non-blocking sockets."""
+        # read request data, retry briefly for non-blocking sockets
         data = b""
         start = time.ticks_ms()
         while time.ticks_diff(time.ticks_ms(), start) < 250:
@@ -244,7 +228,7 @@ class HTTPServer:
         self._safe_send(client, 200, stats)
 
     def _debug(self, client):
-        """Raw internal state for diagnosing empty-log problem."""
+        # raw internal state for diagnosing empty-log problems
         reqs = self.dns_monitor.dns_requests
         devs = self.device_tracker.devices
         payload = {
@@ -284,7 +268,7 @@ class HTTPServer:
     # --- response helpers -------------------------------------------------
 
     def _safe_send(self, client, status, payload):
-        """Serialize payload, degrading to a 503 on MemoryError."""
+        # serialize payload, degrade to 503 on MemoryError
         try:
             self._send(client, status, payload)
         except MemoryError:
@@ -314,8 +298,7 @@ class HTTPServer:
         view = memoryview(data)
         sent = 0
         total = len(data)
-        # Non-blocking socket: retry on EAGAIN, but bound the attempts so a
-        # dead client can never wedge the main loop.
+        # retry on EAGAIN, bounded so a dead client can't wedge the main loop
         attempts = 0
         while sent < total and attempts < 200:
             try:

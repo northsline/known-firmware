@@ -1,7 +1,6 @@
-# Known - Local DNS Privacy Monitor
-# This runs on the Raspberry Pi Pico 2 W.
-# It listens for DNS queries from your devices, logs them, and forwards them to a real DNS server.
-# The dashboard shows you what's happening on your network.
+# Known firmware — pico 2 w dns monitor
+# listens on udp/53, logs queries, forwards to upstream.
+# oled shows query count, wifi status, uptime.
 
 import machine
 import time
@@ -34,13 +33,8 @@ _HEARTBEAT_Y = 2
 
 
 def _show_provisioning_oled():
-    """Cycle a few onboarding hints so the user knows the device is alive.
-
-    Runs for one full rotation through the four unprovisioned screens,
-    then returns. provisioning.enter_provisioning_mode() takes over the
-    serial REPL right after; the cycling is just the "look alive" intro
-    while the user reaches for the setup page.
-    """
+    # cycle onboarding hints so the user knows the device is alive.
+    # runs one full rotation then returns — provisioning takes over after.
     try:
         from machine import Pin, I2C
         import ssd1306
@@ -87,13 +81,7 @@ def _show_provisioning_oled():
 
 
 class OledView:
-    """Drives the 128x64 OLED. Owns its own state so the main loop just
-    calls render(state, now_ms) and forgets.
-
-    All time math uses time.ticks_ms() and ticks_diff(); the display itself
-    is the only thing allocated, and the SSD1306 framebuffer is owned by
-    the driver.
-    """
+    # drives the 128x64 oled. owns its own state, main loop just calls render().
 
     # States. Strings are interned by the compiler — no per-frame alloc.
     S_UNPROVISIONED = "unprovisioned"  # pre-WiFi, during onboarding
@@ -129,9 +117,7 @@ class OledView:
         return str(n_bytes // 1024) + " KB"
 
     def render(self, info, now_ms):
-        """info is a dict built once per main-loop pass. Avoid allocating
-        inside this method by using the cached phase tuples below.
-        """
+        # info is a dict built once per main-loop pass. don't allocate inside here.
         if not self.oled:
             return
 
@@ -233,10 +219,7 @@ class OledView:
 
 
 class KnownHardware:
-    """Hardware control for Known.
-
-    Handles WiFi connection, OLED display, buzzer, and runs the main loop.
-    """
+    # wifi, oled, buzzer, main loop. one-stop shop for the hardware.
 
     def __init__(self):
         import devices
@@ -366,8 +349,7 @@ class KnownHardware:
         return False
 
     def _wifi_status_name(self, status):
-        """Return human-readable WiFi status."""
-        # Hardcoded status values (MicroPython STAT_* constants)
+        # micropython STAT_* constants to human-readable
         statuses = {
             0: "IDLE",
             1: "CONNECTING",
@@ -411,9 +393,7 @@ hw = None
 
 
 def _draw_restart_screen(view, n_frames=4):
-    """Show the 'Restarting...' spinner for a few frames so the user
-    actually sees it before machine.reset() wipes the display.
-    """
+    # show the spinner for a few frames before machine.reset() wipes the display
     view.set_state(OledView.S_RESTARTING)
     start = time.ticks_ms()
     # One full spinner rotation = 4 * RESTART_SPINNER_MS.

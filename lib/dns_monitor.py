@@ -16,13 +16,9 @@ class DNSMonitor:
         self.dns_requests = []
         self.device_tracker = device_tracker
         self.last_error = None  # surfaced via /debug
-        # Persistent upstream socket, one open connection reused for all
-        # forwarded queries. Built on demand in start_server() and torn
-        # down in stop_server(). Non-blocking; polled in check_for_packets().
+        # upstream socket, one per instance. non-blocking, polled in check_for_packets.
         self.upstream = None
-        # In-flight queries: list of [txid, client_addr, sent_ms].
-        # Bounded by _MAX_INFLIGHT so we never queue more than we can serve.
-        # Each entry is a small list (3 ints + 1 tuple) to avoid dict overhead.
+        # in-flight: [txid, client_addr, sent_ms]. capped at _MAX_INFLIGHT.
         self._inflight = []
 
     def start_server(self):
@@ -61,8 +57,7 @@ class DNSMonitor:
             self.upstream = None
 
     def _drop_stale(self, now_ms):
-        # Walk in-flight list, drop anything older than _INFLIGHT_TTL_MS.
-        # Done in-place; no allocation. Caller bounds _inflight size.
+        # drop anything older than _INFLIGHT_TTL_MS. swap-pop, no alloc.
         i = 0
         n = len(self._inflight)
         while i < n:
@@ -80,7 +75,7 @@ class DNSMonitor:
 
         now_ms = time.ticks_ms()
 
-        # 1. Drain any upstream responses we owe to clients. Non-blocking.
+        # 1. drain upstream responses. non-blocking.
         if self.upstream is not None and self._inflight:
             r, _, _ = select.select([self.upstream], [], [], 0)
             if r:
@@ -112,11 +107,10 @@ class DNSMonitor:
                             self.last_error = "sendto client: {}".format(e)
                             print("Sendto client error: {}".format(e))
 
-        # 2. Expire stale in-flight queries so a dropped upstream response
-        #    doesn't pin a slot forever.
+        # 2. drop stale in-flight so a dead upstream response doesn't pin a slot.
         self._drop_stale(now_ms)
 
-        # 3. Poll listen socket. Non-blocking, same pattern as the HTTP server.
+        # 3. poll listen socket. non-blocking, same as http server.
         ready = select.select([self.sock], [], [], 0)
         if not ready[0]:
             return None
@@ -139,10 +133,8 @@ class DNSMonitor:
         else:
             print("[dns] _parse_domain FAILED for {}-byte packet".format(len(data)))
 
-        # Fire-and-forget forward. Never blocks the main loop: if the
-        # upstream socket is busy or the in-flight queue is full, we just
-        # log the capture and move on. The local log is the user-facing
-        # signal; upstream is best-effort.
+        # fire-and-forget forward. never blocks. if upstream is busy or
+        # in-flight is full, we just log and move on.
         self._forward_query(data, addr)
 
         if domain:

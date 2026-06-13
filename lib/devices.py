@@ -1,29 +1,14 @@
-"""
-Known - device tracker
-
-Lightweight registry of LAN devices seen issuing DNS queries through Known. The
-DNS monitor calls record() for every parsed query; the HTTP API reads back the
-registry for the /devices and /stats endpoints.
-
-Keyed by source IP string. Heuristic detection (trust_level, flagged_count) is
-left for a future revision - for the MVP every device is "unknown" and nothing
-is flagged.
-
-Naming: devices get a stable "Device #N" name based on insertion order. We try
-a quick reverse-DNS lookup (socket.gethostbyaddr); if it returns a real name
-(not the IP back), we use that. Otherwise we fall back to the friendly name.
-"""
+# device tracker — keeps a registry of LAN devices seen in dns queries.
+# keyed by source IP. reverse-dns lookup for friendly names, fallback to "Device #N".
+# trust_level and flagged_count are stubs for future heuristics.
 
 import socket
 import time
 
 
 def _try_reverse_dns(ip):
-    """Best-effort reverse DNS. Returns a hostname string or None.
-
-    The Pico's MicroPython socket may not support gethostbyaddr, so callers
-    must handle the case where this isn't available. We do.
-    """
+    # best-effort reverse dns. returns hostname or None.
+    # micropython might not have gethostbyaddr, so callers handle that.
     try:
         name, _, _ = socket.gethostbyaddr(ip)
     except Exception:

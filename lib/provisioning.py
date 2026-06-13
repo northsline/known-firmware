@@ -1,9 +1,5 @@
-"""
-Known - USB WebSerial provisioning
-
-Line-delimited JSON over USB CDC (115200 baud). See the onboarding PWA for the
-host side of this protocol.
-"""
+# usb webserial provisioning — line-delimited json over usb cdc (115200 baud).
+# see the onboarding pwa for the host side.
 
 import sys
 import json
