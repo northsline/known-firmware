@@ -14,9 +14,33 @@ OLED_MAX_CHARS = 16
 WIFI_TIMEOUT_S = 30
 MDNS_HOSTNAME = "known"
 
+# OLED timing. All in ms; use ticks_ms/ticks_diff everywhere.
+OLED_CYCLE_MS = 3000            # how long each phase shows during normal operation
+OLED_CYCLE_PROVISIONING_MS = 800  # fast cycle for the pre-serial intro
+# The provisioning intro must finish inside the PWA's ~15 s ready-beacon
+# window after a port-open reboot. Keep it short so enter_provisioning_mode()
+# can send {"status": "ready"} in time.
+HEARTBEAT_MS = 1000        # corner dot blink period
+WIFI_LOST_PULSE_MS = 250   # half-period of WiFi-lost flash
+RESTART_SPINNER_MS = 150   # spinner frame duration
+
+# Spinner glyphs for the "Restarting..." screen. Module-level so the
+# string objects are allocated once at import time, not per frame.
+_SPINNER = ['|', '/', '-', '\\']
+
+# Heartbeat dot pixel coords (top-right corner, just inside the bezel).
+_HEARTBEAT_X = 122
+_HEARTBEAT_Y = 2
+
 
 def _show_provisioning_oled():
-    """Quick setup screen so the user knows the device is alive."""
+    """Cycle a few onboarding hints so the user knows the device is alive.
+
+    Runs for one full rotation through the four unprovisioned screens,
+    then returns. provisioning.enter_provisioning_mode() takes over the
+    serial REPL right after; the cycling is just the "look alive" intro
+    while the user reaches for the setup page.
+    """
     try:
         from machine import Pin, I2C
         import ssd1306
@@ -26,14 +50,186 @@ def _show_provisioning_oled():
             print("OLED not detected on I2C bus")
             return
         oled = ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3C)
-        oled.fill(0)
-        oled.text("Setup", 0, 0)
-        oled.text("Plug into PC", 0, 16)
-        oled.text("Open the app", 0, 32)
-        oled.show()
-        print("OLED: setup screen shown")
+
+        # Four screens, one full rotation. Phases are tuples of
+        # (line1, line2, line3) — short strings, no allocation per frame.
+        phases = [
+            ("Known",  "Plug into PC",   "Open known.setup"),
+            ("Known",  "Setting up...",  " "),
+            ("Known",  "Ready",          " "),
+            ("Known",  "Waiting for you", " "),
+        ]
+        # Pre-slice to the OLED width so we don't truncate on every call.
+        for i in range(len(phases)):
+            phases[i] = (phases[i][0][:OLED_MAX_CHARS],
+                         phases[i][1][:OLED_MAX_CHARS],
+                         phases[i][2][:OLED_MAX_CHARS])
+
+        start = time.ticks_ms()
+        idx = 0
+        n = len(phases)
+        # One full rotation = n * OLED_CYCLE_PROVISIONING_MS, then bail to provisioning.
+        while time.ticks_diff(time.ticks_ms(), start) < n * OLED_CYCLE_PROVISIONING_MS:
+            oled.fill(0)
+            oled.text(phases[idx][0], 0, 0)
+            oled.text(phases[idx][1], 0, 16)
+            oled.text(phases[idx][2], 0, 32)
+            # Heartbeat so the user can tell at a glance it's alive.
+            now = time.ticks_ms()
+            if (now // HEARTBEAT_MS) & 1:
+                oled.pixel(_HEARTBEAT_X, _HEARTBEAT_Y, 1)
+            oled.show()
+            time.sleep_ms(OLED_CYCLE_PROVISIONING_MS)
+            idx = (idx + 1) % n
+        print("OLED: provisioning intro done")
     except Exception as e:
         print("OLED setup screen skipped:", e)
+
+
+class OledView:
+    """Drives the 128x64 OLED. Owns its own state so the main loop just
+    calls render(state, now_ms) and forgets.
+
+    All time math uses time.ticks_ms() and ticks_diff(); the display itself
+    is the only thing allocated, and the SSD1306 framebuffer is owned by
+    the driver.
+    """
+
+    # States. Strings are interned by the compiler — no per-frame alloc.
+    S_UNPROVISIONED = "unprovisioned"  # pre-WiFi, during onboarding
+    S_CONNECTING = "connecting"        # first WiFi connect attempt
+    S_ONLINE = "online"                # connected, monitoring
+    S_WIFI_LOST = "wifi_lost"          # was connected, now isn't
+    S_RESTARTING = "restarting"        # pre-reset spinner
+
+    def __init__(self, oled):
+        self.oled = oled
+        self.state = self.S_UNPROVISIONED
+        self.phase = 0                # current screen index
+        self.last_phase_ms = 0        # when we last rotated
+        self.last_heartbeat_ms = 0    # for the corner dot
+        self.boot_ms = time.ticks_ms()
+
+    def set_state(self, state):
+        if state != self.state:
+            self.state = state
+            self.phase = 0
+            self.last_phase_ms = time.ticks_ms()
+
+    def _draw_heartbeat(self, now_ms):
+        # Blink once per second. (now // period) is 0/1, gives a 50% duty.
+        if (now_ms // HEARTBEAT_MS) & 1:
+            self.oled.pixel(_HEARTBEAT_X, _HEARTBEAT_Y, 1)
+
+    def _format_kb(self, n_bytes):
+        # Inline so we don't allocate a helper string each call.
+        # DNS packets cap at 512 bytes; we just want a human "X KB" feel.
+        if n_bytes < 1024:
+            return str(n_bytes) + " B"
+        return str(n_bytes // 1024) + " KB"
+
+    def render(self, info, now_ms):
+        """info is a dict built once per main-loop pass. Avoid allocating
+        inside this method by using the cached phase tuples below.
+        """
+        if not self.oled:
+            return
+
+        # Rotate the screen on a fixed cadence, regardless of state.
+        # (WiFi-lost has its own timing — see below.)
+        if self.state != self.S_WIFI_LOST and \
+                time.ticks_diff(now_ms, self.last_phase_ms) >= OLED_CYCLE_MS:
+            self.phase = (self.phase + 1)
+            self.last_phase_ms = now_ms
+
+        self.oled.fill(0)
+
+        if self.state == self.S_UNPROVISIONED:
+            self._render_unprovisioned()
+        elif self.state == self.S_CONNECTING:
+            self._render_connecting(info, now_ms)
+        elif self.state == self.S_ONLINE:
+            self._render_online(info, now_ms)
+        elif self.state == self.S_WIFI_LOST:
+            self._render_wifi_lost(now_ms)
+        elif self.state == self.S_RESTARTING:
+            self._render_restarting(now_ms)
+        else:
+            # Unknown state — show nothing rather than crash.
+            pass
+
+        # Heartbeat goes on top of every screen.
+        self._draw_heartbeat(now_ms)
+        try:
+            self.oled.show()
+        except Exception as e:
+            print("Display update error:", e)
+
+    def _render_unprovisioned(self):
+        # Mirrors _show_provisioning_oled phases, just in case the view
+        # is used directly without the pre-roll.
+        phases = [
+            ("Known", "Plug into PC",  "Open known.setup"),
+            ("Known", "Setting up...", " "),
+            ("Known", "Ready",         " "),
+            ("Known", "Waiting for you", " "),
+        ]
+        i = self.phase % 4
+        l1, l2, l3 = phases[i]
+        self.oled.text(l1[:OLED_MAX_CHARS], 0, 0)
+        self.oled.text(l2[:OLED_MAX_CHARS], 0, 16)
+        self.oled.text(l3[:OLED_MAX_CHARS], 0, 32)
+
+    def _render_connecting(self, info, now_ms):
+        # Two phases: "WiFi: <ssid>" then "Status: connecting".
+        ssid = info.get("ssid", "")
+        if (self.phase & 1) == 0:
+            self.oled.text("Known", 0, 0)
+            self.oled.text("WiFi:", 0, 16)
+            self.oled.text(ssid[:OLED_MAX_CHARS], 0, 32)
+        else:
+            self.oled.text("Known", 0, 0)
+            self.oled.text("WiFi...", 0, 16)
+            self.oled.text("connecting", 0, 32)
+
+    def _render_online(self, info, now_ms):
+        # Two alternating screens.
+        # Phase 0: "Known / N queries / X KB"
+        # Phase 1: "Known / Wi-Fi: XX% / Uptime: Xh"
+        queries = info.get("queries", 0)
+        kb = info.get("kb", 0)
+        rssi = info.get("rssi", 0)
+        uptime_h = (time.ticks_diff(now_ms, self.boot_ms) // 3600000)
+        if (self.phase & 1) == 0:
+            self.oled.text("Known", 0, 0)
+            self.oled.text(("Q: " + str(queries))[:OLED_MAX_CHARS], 0, 16)
+            self.oled.text(self._format_kb(kb)[:OLED_MAX_CHARS], 0, 32)
+        else:
+            # Map RSSI to a rough % (0..100). Clamp at 0.
+            pct = rssi + 100
+            if pct < 0:
+                pct = 0
+            elif pct > 100:
+                pct = 100
+            self.oled.text("Known", 0, 0)
+            self.oled.text(("Wi-Fi: " + str(pct) + "%")[:OLED_MAX_CHARS], 0, 16)
+            self.oled.text(("Uptime: " + str(uptime_h) + "h")[:OLED_MAX_CHARS], 0, 32)
+
+    def _render_wifi_lost(self, now_ms):
+        # Pulse: hardware-invert the panel at 2 Hz. The SSD1306 driver
+        # has invert(n) which flips the whole framebuffer in place —
+        # we just redraw the same text in normal color and toggle.
+        pulse_on = ((now_ms // WIFI_LOST_PULSE_MS) & 1) == 0
+        self.oled.fill(0)
+        self.oled.text("WiFi Lost", 0, 16)
+        self.oled.text("Retrying...", 0, 32)
+        self.oled.invert(1 if pulse_on else 0)
+
+    def _render_restarting(self, now_ms):
+        # Spinner frame from module-level tuple. No allocation.
+        frame = _SPINNER[(now_ms // RESTART_SPINNER_MS) & 3]
+        self.oled.text("Restarting...", 0, 16)
+        self.oled.text(frame, 110, 16)
 
 
 class KnownHardware:
@@ -41,7 +237,7 @@ class KnownHardware:
 
     Handles WiFi connection, OLED display, buzzer, and runs the main loop.
     """
-    
+
     def __init__(self):
         import devices
 
@@ -50,6 +246,7 @@ class KnownHardware:
 
         self.oled = self._init_oled()
         self.buzzer = self._init_buzzer()
+        self.view = OledView(self.oled)
 
         self.wlan = None
         self.ip_address = None
@@ -103,7 +300,7 @@ class KnownHardware:
         import network
 
         print("Attempting to connect to", ssid)
-        
+
         # First, scan for networks to see what's available
         print("Scanning for networks...")
         wlan_temp = network.WLAN(network.STA_IF)
@@ -112,9 +309,12 @@ class KnownHardware:
         print("Networks found:", len(networks))
         for n in networks:
             print(" -", n[0].decode(), "RSSI:", n[3], "sec:", n[5])
-        
+
         self.wlan = network.WLAN(network.STA_IF)
         self.wlan.active(True)
+        self.view.set_state(OledView.S_CONNECTING)
+        # We don't render here — the main loop is what calls render. The
+        # state change is enough; the next loop tick will pick it up.
 
         if not self.wlan.isconnected():
             self.wlan.connect(ssid, password)
@@ -154,14 +354,15 @@ class KnownHardware:
             print("WiFi connected. IP:", self.ip_address)
             self.was_connected = True
             self._start_mdns()
-            if self.oled:
-                self.update_display("WiFi Connected", self.ip_address, "Ready")
+            self.view.set_state(OledView.S_ONLINE)
             self._start_dns_monitor()
             return True
 
         print("WiFi connection failed")
-        if self.oled:
-            self.update_display("WiFi Failed", str(ssid)[:OLED_MAX_CHARS], "Retrying...")
+        # Don't drop to wifi_lost on a *first* connect failure — that
+        # would flash the user with a scary screen on a normal config
+        # mistake. Leave the connecting screen up; the main loop will
+        # call us again on the slow retry timer.
         return False
 
     def _wifi_status_name(self, status):
@@ -169,7 +370,7 @@ class KnownHardware:
         # Hardcoded status values (MicroPython STAT_* constants)
         statuses = {
             0: "IDLE",
-            1: "CONNECTING", 
+            1: "CONNECTING",
             2: "WRONG_PASSWORD",
             3: "NO_AP_FOUND",
             4: "CONNECT_FAIL",
@@ -205,19 +406,23 @@ class KnownHardware:
             )
         self.http.start()
 
-    def update_display(self, line1="", line2="", line3=""):
-        if self.oled:
-            try:
-                self.oled.fill(0)
-                self.oled.text(line1[:OLED_MAX_CHARS], 0, 0)
-                self.oled.text(line2[:OLED_MAX_CHARS], 0, 16)
-                self.oled.text(line3[:OLED_MAX_CHARS], 0, 32)
-                self.oled.show()
-            except Exception as e:
-                print("Display update error:", e)
-
 
 hw = None
+
+
+def _draw_restart_screen(view, n_frames=4):
+    """Show the 'Restarting...' spinner for a few frames so the user
+    actually sees it before machine.reset() wipes the display.
+    """
+    view.set_state(OledView.S_RESTARTING)
+    start = time.ticks_ms()
+    # One full spinner rotation = 4 * RESTART_SPINNER_MS.
+    duration = n_frames * RESTART_SPINNER_MS
+    while time.ticks_diff(time.ticks_ms(), start) < duration:
+        # Build a tiny info dict — the spinner screen ignores it, but
+        # keeping the call shape uniform avoids branching in the view.
+        view.render({}, time.ticks_ms())
+        time.sleep_ms(RESTART_SPINNER_MS)
 
 
 def run():
@@ -235,17 +440,28 @@ def run():
         # Serial first — OLED/I2C init can delay USB command handling.
         provisioning.enter_provisioning_mode()
         print("Rebooting after provisioning...")
-        time.sleep(1)
+        # Build a throwaway view just for the spinner — the device is
+        # about to reset, no need to spin up the full hardware class.
+        try:
+            from machine import Pin, I2C
+            import ssd1306
+            i2c = I2C(1, scl=Pin(OLED_SCL_PIN), sda=Pin(OLED_SDA_PIN), freq=400000)
+            if 0x3C in i2c.scan():
+                oled = ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3C)
+                view = OledView(oled)
+                _draw_restart_screen(view)
+        except Exception as e:
+            print("Restart screen skipped:", e)
         machine.reset()
         return
 
     hw = KnownHardware()
     hw.beep(200)
+    hw.view.set_state(OledView.S_ONLINE)
 
     cfg = provisioning.load_config()
     hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
 
-    last_oled_update = 0
     last_wifi_check = 0
     while True:
         now = time.ticks_ms()
@@ -259,33 +475,26 @@ def run():
         if hw.http:
             hw.http.poll()
 
-        if time.ticks_diff(now, last_oled_update) >= 10000:
-            if hw.ip_address:
-                # Get DNS query count
-                query_count = 0
-                if hw.dns_mon and hw.dns_mon.dns_requests:
-                    query_count = len(hw.dns_mon.dns_requests)
-                hw.update_display(
-                    "Known v0.1",
-                    ("Queries: " + str(query_count))[:OLED_MAX_CHARS],
-                    "Monitoring...",
-                )
-            elif hw.was_connected:
-                hw.update_display("WiFi Lost", "Retrying...", "")
-            else:
-                hw.update_display("Known v0.1", "No WiFi", "Retrying...")
-            last_oled_update = now
+        # Build the small info dict the view needs. Done once per loop
+        # pass; the view itself doesn't allocate on the hot path.
+        info = {
+            "queries": len(hw.dns_mon.dns_requests) if (hw.dns_mon and hw.dns_mon.dns_requests) else 0,
+            "kb": 0,  # byte count not yet tracked; placeholder for the format
+            "rssi": hw.wlan.status("rssi") if hw.wlan and hw.wlan.isconnected() else 0,
+            "ssid": cfg.get("ssid", ""),
+        }
+        if hw.ip_address and hw.wlan and hw.wlan.isconnected():
+            hw.view.set_state(OledView.S_ONLINE)
+        elif hw.was_connected:
+            hw.view.set_state(OledView.S_WIFI_LOST)
+        # else: keep current state (CONNECTING or initial)
+
+        hw.view.render(info, now)
 
         if time.ticks_diff(now, last_wifi_check) >= 30000:
             if not hw.wlan or not hw.wlan.isconnected():
                 hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
             last_wifi_check = now
-
-        # Immediate reconnect if we lost connection (debounced)
-        if hw.was_connected and (not hw.wlan or not hw.wlan.isconnected()):
-            if time.ticks_diff(now, last_wifi_check) >= 5000:
-                hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
-                last_wifi_check = now
 
         time.sleep_ms(100)
 
