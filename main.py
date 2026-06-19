@@ -53,7 +53,7 @@ def _show_provisioning_oled():
             ("Known",  "Ready",          " "),
             ("Known",  "Waiting for you", " "),
         ]
-        # Pre-slice to the OLED width so we don't truncate on every call.
+        # Pre-slice to the OLED width so we do not truncate on every call.
         for i in range(len(phases)):
             phases[i] = (phases[i][0][:OLED_MAX_CHARS],
                          phases[i][1][:OLED_MAX_CHARS],
@@ -68,7 +68,7 @@ def _show_provisioning_oled():
             oled.text(phases[idx][0], 0, 0)
             oled.text(phases[idx][1], 0, 16)
             oled.text(phases[idx][2], 0, 32)
-            # Heartbeat so the user can tell at a glance it's alive.
+            # Heartbeat so the user can tell at a glance it is alive.
             now = time.ticks_ms()
             if (now // HEARTBEAT_MS) & 1:
                 oled.pixel(_HEARTBEAT_X, _HEARTBEAT_Y, 1)
@@ -110,14 +110,14 @@ class OledView:
             self.oled.pixel(_HEARTBEAT_X, _HEARTBEAT_Y, 1)
 
     def _format_kb(self, n_bytes):
-        # Inline so we don't allocate a helper string each call.
+        # Inline so we do not allocate a helper string each call.
         # DNS packets cap at 512 bytes; we just want a human "X KB" feel.
         if n_bytes < 1024:
             return str(n_bytes) + " B"
         return str(n_bytes // 1024) + " KB"
 
     def render(self, info, now_ms):
-        # info is a dict built once per main-loop pass. don't allocate inside here.
+        # info is a dict built once per main-loop pass. do not allocate inside here.
         if not self.oled:
             return
 
@@ -284,7 +284,7 @@ class KnownHardware:
 
         print("Attempting to connect to", ssid)
 
-        # First, scan for networks to see what's available
+        # First, scan for networks to see what is available
         print("Scanning for networks...")
         wlan_temp = network.WLAN(network.STA_IF)
         wlan_temp.active(True)
@@ -296,7 +296,7 @@ class KnownHardware:
         self.wlan = network.WLAN(network.STA_IF)
         self.wlan.active(True)
         self.view.set_state(OledView.S_CONNECTING)
-        # We don't render here — the main loop is what calls render. The
+        # We do not render here — the main loop is what calls render. The
         # state change is enough; the next loop tick will pick it up.
 
         if not self.wlan.isconnected():
@@ -310,7 +310,7 @@ class KnownHardware:
                 print("  status:", status, "-", self._wifi_status_name(status))
                 if time.time() - start > WIFI_TIMEOUT_S:
                     break
-                # Check if we're in a failed state
+                # Check if we are in a failed state
                 if status == network.STAT_WRONG_PASSWORD:
                     print("WiFi: wrong password")
                     return False
@@ -342,7 +342,7 @@ class KnownHardware:
             return True
 
         print("WiFi connection failed")
-        # Don't drop to wifi_lost on a *first* connect failure — that
+        # Do not drop to wifi_lost on a *first* connect failure — that
         # would flash the user with a scary screen on a normal config
         # mistake. Leave the connecting screen up; the main loop will
         # call us again on the slow retry timer.
@@ -383,8 +383,11 @@ class KnownHardware:
 
     def _start_http_server(self, http_server):
         if self.http is None:
+            # Pass the device token so the server can expose it for future auth.
+            import provisioning
+            token = provisioning.load_config().get("device_token")
             self.http = http_server.HTTPServer(
-                self.dns_mon, self.device_tracker, port=8080
+                self.dns_mon, self.device_tracker, port=8080, device_token=token
             )
         self.http.start()
 
@@ -440,6 +443,10 @@ def run():
     hw.view.set_state(OledView.S_ONLINE)
 
     cfg = provisioning.load_config()
+    # Generate a device token on first boot if one does not exist yet.
+    # Unused by the consumer dashboard now — the primitive is here so
+    # auth can be added later without a firmware reflash on deployed devices.
+    provisioning.ensure_device_token()
     hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
 
     last_wifi_check = 0
@@ -456,7 +463,7 @@ def run():
             hw.http.poll()
 
         # Build the small info dict the view needs. Done once per loop
-        # pass; the view itself doesn't allocate on the hot path.
+        # pass; the view itself does not allocate on the hot path.
         info = {
             "queries": len(hw.dns_mon.dns_requests) if (hw.dns_mon and hw.dns_mon.dns_requests) else 0,
             "kb": 0,  # byte count not yet tracked; placeholder for the format

@@ -33,12 +33,13 @@ _STATUS_TEXT = {
 
 
 class HTTPServer:
-    def __init__(self, dns_monitor, device_tracker, port=8080):
+    def __init__(self, dns_monitor, device_tracker, port=8080, device_token=None):
         self.dns_monitor = dns_monitor
         self.device_tracker = device_tracker
         self.port = port
         self.sock = None
         self.allowlist = []
+        self.device_token = device_token
 
     def start(self):
         if self.sock:
@@ -155,6 +156,17 @@ class HTTPServer:
 
         if method == "GET" and base == "/health":
             self._send(client, 200, {"status": "ok"})
+        elif method == "GET" and base == "/token":
+            # Expose the device token for future auth flows. Returns a
+            # truncated hint — the full token is only sent over the
+            # local network, never exposed publicly.
+            if self.device_token:
+                self._send(client, 200, {
+                    "status": "ok",
+                    "token_hint": self.device_token[:8]
+                })
+            else:
+                self._send(client, 404, {"status": "error", "reason": "no_token"})
         elif method == "GET" and base == "/audit/weekly":
             self._audit_weekly(client, query)
         elif method == "GET" and base == "/devices":
@@ -298,7 +310,7 @@ class HTTPServer:
         view = memoryview(data)
         sent = 0
         total = len(data)
-        # retry on EAGAIN, bounded so a dead client can't wedge the main loop
+        # retry on EAGAIN, bounded so a dead client cannot wedge the main loop
         attempts = 0
         while sent < total and attempts < 200:
             try:

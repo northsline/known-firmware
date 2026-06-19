@@ -40,6 +40,36 @@ def save_config(data):
         json.dump(data, f)
 
 
+def _rand_hex(n=32):
+    # Random hex string using machine.rng() — available on RP2 port.
+    # Falls back to ubinascii if rng is missing (should not happen on Pico 2 W).
+    try:
+        from machine import rng
+        return "".join("{:02x}".format(rng()) for _ in range(n // 2 + 1))[:n]
+    except Exception:
+        import ubinascii
+        import os
+        return ubinascii.hexlify(os.urandom(n // 2)).decode()[:n]
+
+
+def ensure_device_token():
+    """Generate and persist a random device token if one does not exist yet.
+    Called once on first boot. The token is stored in config.json and can
+    later be used for API authentication without a firmware reflash."""
+    cfg = load_config()
+    if cfg.get("device_token"):
+        return cfg["device_token"]
+    token = _rand_hex(32)
+    cfg["device_token"] = token
+    try:
+        save_config(cfg)
+        print("Device token generated:", token[:8] + "...")
+    except OSError as e:
+        print("Failed to save device token:", e)
+        return None
+    return token
+
+
 def is_provisioned():
     cfg = load_config()
     return bool(cfg.get("ssid")) and "pass" in cfg
@@ -80,6 +110,66 @@ def _handle(line):
             "code": cfg.get("sticker_code"),
             "device_id": cfg.get("device_id"),
         })
+        return False
+
+    if cmd == "scan":
+        # Return available WiFi networks as JSON so the PWA can show
+        # a dropdown instead of asking the user to type the SSID.
+        try:
+            import network
+            wlan = network.WLAN(network.STA_IF)
+            wlan.active(True)
+            nets = wlan.scan()
+            # Each result: (ssid, bssid, channel, rssi, authmode, hidden)
+            # Cap at 15 to keep the payload small.
+            out = []
+            for n in nets[:15]:
+                try:
+                    ssid = n[0].decode("utf-8", "ignore") if n[0] else ""
+                except Exception:
+                    ssid = ""
+                bssid = ":".join("{:02x}".format(b) for b in n[1]) if n[1] else ""
+                out.append({
+                    "ssid": ssid,
+                    "bssid": bssid,
+                    "channel": n[2] if len(n) > 2 else 0,
+                    "rssi": n[3] if len(n) > 3 else 0,
+                    "hidden": bool(n[5]) if len(n) > 5 else False,
+                })
+            _send({"status": "ok", "networks": out})
+        except Exception as e:
+            _send({"status": "error", "reason": "scan_failed:%s" % e})
+        return False
+
+    if cmd == "router_info":
+        # Return the connected AP's BSSID and the Pico's IP address.
+        # Called by the PWA after provisioning to identify the router
+        # vendor (OUI lookup on BSSID prefix) and show router-specific
+        # setup instructions.
+        try:
+            import network
+            wlan = network.WLAN(network.STA_IF)
+            if not wlan.isconnected():
+                # Freshly provisioned devices have not rebooted yet. Try to
+                # connect using the saved config so the PWA can read the
+                # AP's BSSID while still on USB.
+                cfg = load_config()
+                ssid = cfg.get("ssid")
+                pwd = cfg.get("pass")
+                if ssid and pwd is not None:
+                    wlan.active(True)
+                    wlan.connect(ssid, pwd)
+                    start = time.time()
+                    while not wlan.isconnected() and (time.time() - start) < 15:
+                        time.sleep(0.5)
+            if not wlan.isconnected():
+                _send({"status": "error", "reason": "not_connected"})
+                return False
+            bssid = ":".join("{:02x}".format(b) for b in wlan.config("bssid"))
+            ip = wlan.ifconfig()[0]
+            _send({"status": "ok", "bssid": bssid, "ip": ip})
+        except Exception as e:
+            _send({"status": "error", "reason": "router_info_failed:%s" % e})
         return False
 
     if cmd == "provision":
