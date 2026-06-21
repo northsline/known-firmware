@@ -7,25 +7,6 @@ import time
 
 CONFIG_PATH = "/config.json"
 
-_ALPHANUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-
-def _valid_code(code):
-    if not isinstance(code, str):
-        return False
-    parts = code.split("-")
-    if len(parts) != 3:
-        return False
-    prefix, a, b = parts
-    if prefix != "KNOWN":
-        return False
-    if len(a) != 4 or len(b) != 4:
-        return False
-    for ch in a + b:
-        if ch not in _ALPHANUM:
-            return False
-    return True
-
 
 def load_config():
     try:
@@ -104,12 +85,69 @@ def _handle(line):
     cmd = msg.get("cmd")
 
     if cmd == "identify":
-        cfg = load_config()
+        # Return device identity from OTP/key storage.
+        # No sticker code — the device proves itself via challenge-response.
+        try:
+            import otp_keys
+            serial = otp_keys.get_serial()
+            has_keys = otp_keys.has_keys()
+        except Exception:
+            serial = None
+            has_keys = False
         _send({
             "status": "ok",
-            "code": cfg.get("sticker_code"),
-            "device_id": cfg.get("device_id"),
+            "serial": serial,
+            "has_keys": has_keys,
         })
+        return False
+
+    if cmd == "challenge":
+        # Challenge-response authentication.
+        # PWA sends a random nonce, device signs it with its private key.
+        # PWA verifies the signature against the device public key
+        # (extracted from the device certificate, which is signed by
+        # the Northsline root key embedded in the PWA).
+        nonce_hex = msg.get("nonce")
+        if not nonce_hex or not isinstance(nonce_hex, str):
+            _send({"status": "error", "reason": "missing_nonce"})
+            return False
+
+        try:
+            nonce_bytes = bytes.fromhex(nonce_hex)
+        except ValueError:
+            _send({"status": "error", "reason": "bad_nonce"})
+            return False
+
+        if len(nonce_bytes) != 32:
+            _send({"status": "error", "reason": "bad_nonce_length"})
+            return False
+
+        try:
+            import otp_keys
+            import ecdsa
+            import ubinascii
+
+            priv_int = otp_keys.get_private_key_int()
+            if priv_int is None:
+                _send({"status": "error", "reason": "no_keys"})
+                return False
+
+            serial = otp_keys.get_serial()
+            cert = otp_keys.get_certificate()
+            if cert is None:
+                _send({"status": "error", "reason": "no_cert"})
+                return False
+
+            # Sign the nonce (ecdsa.sign hashes internally with SHA-256)
+            sig_der = ecdsa.sign(priv_int, nonce_bytes)
+            _send({
+                "status": "ok",
+                "serial": serial,
+                "cert": ubinascii.hexlify(cert).decode(),
+                "signature": ubinascii.hexlify(sig_der).decode(),
+            })
+        except Exception as e:
+            _send({"status": "error", "reason": "sign_failed:%s" % e})
         return False
 
     if cmd == "scan":
@@ -175,22 +213,12 @@ def _handle(line):
     if cmd == "provision":
         ssid = msg.get("ssid")
         password = msg.get("pass")
-        code = msg.get("code")
 
         if not ssid or password is None:
             _send({"status": "error", "reason": "missing_wifi"})
             return False
-        if not _valid_code(code):
-            _send({"status": "error", "reason": "bad_code"})
-            return False
 
         cfg = load_config()
-        existing = cfg.get("sticker_code")
-        if existing and existing != code:
-            _send({"status": "error", "reason": "code_mismatch"})
-            return False
-
-        cfg["sticker_code"] = code
         cfg["ssid"] = ssid
         cfg["pass"] = password
         try:
@@ -206,18 +234,47 @@ def _handle(line):
     return False
 
 
-def enter_provisioning_mode():
-    print("Entering provisioning mode. Waiting for USB setup...")
-    _send({"status": "ready"})
+# Global poller used by bulk reader. Initialised lazily so import is cheap.
+_poll = None
 
-    poll = None
+
+def _init_poll():
+    global _poll
+    if _poll is not None:
+        return
     try:
         import uselect
 
-        poll = uselect.poll()
-        poll.register(sys.stdin, uselect.POLLIN)
+        _poll = uselect.poll()
+        _poll.register(sys.stdin, uselect.POLLIN)
     except Exception:
-        poll = None
+        _poll = None
+
+
+def _read_available():
+    """Read as many bytes as currently available from stdin without blocking.
+    Some MicroPython USB-CDC stacks deliver data one byte at a time; batching
+    improves reliability and prevents dropped characters between beacons.
+    """
+    _init_poll()
+    data = ""
+    try:
+        while True:
+            if _poll is not None:
+                if not _poll.poll(0):
+                    break
+            ch = sys.stdin.read(1)
+            if not ch:
+                break
+            data += ch
+    except Exception:
+        pass
+    return data
+
+
+def enter_provisioning_mode():
+    print("Entering provisioning mode. Waiting for USB setup...")
+    _send({"status": "ready"})
 
     buf = ""
     last_ready = time.ticks_ms()
@@ -227,30 +284,24 @@ def enter_provisioning_mode():
         if time.ticks_diff(now, last_ready) > 2000:
             _send({"status": "ready"})
             last_ready = now
-
-        ch = None
-        if poll is not None:
-            if poll.poll(0):
-                try:
-                    ch = sys.stdin.read(1)
-                except Exception:
-                    ch = None
-        else:
             try:
-                ch = sys.stdin.read(1)
+                sys.stdout.flush()
             except Exception:
-                ch = None
+                pass
 
-        if not ch:
+        data = _read_available()
+        if data:
+            for ch in data:
+                if ch in ("\n", "\r"):
+                    if buf:
+                        if _handle(buf):
+                            print("Provisioning complete.")
+                            return
+                        buf = ""
+                    continue
+                buf += ch
+        else:
             time.sleep_ms(10)
-            continue
 
-        if ch in ("\n", "\r"):
-            if buf:
-                if _handle(buf):
-                    print("Provisioning complete.")
-                    return
-                buf = ""
-            continue
-
-        buf += ch
+    # Unreachable.
+    _send({"status": "error", "reason": "provisioning_loop_exit"})
