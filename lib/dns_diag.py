@@ -8,12 +8,11 @@ def _now_ms():
 
 
 def _log(tag, msg):
-    # Tagged print so output is easy to grep.
-    print("[{}] {}".format(tag, msg))
+    # Tagged print so output is easy to grep. Print("[{}] {}".format(tag, msg))
 
 
 def test_listen(bind_ip="0.0.0.0", port=53, wait_s=8):
-    # T1 — just bind and wait. if nothing comes in, the network path is broken.
+    # T1: just bind and wait. If nothing comes in, the network path is broken.
     _log("T1", "binding {}:{} ...".format(bind_ip, port))
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -23,7 +22,7 @@ def test_listen(bind_ip="0.0.0.0", port=53, wait_s=8):
         _log("T1", "FAIL bind: {}".format(e))
         return None, None
 
-    _log("T1", "bound. waiting up to {}s for any packet ...".format(wait_s))
+    _log("T1", "Bound. Waiting up to {}s for any packet...".format(wait_s))
     try:
         data, addr = s.recvfrom(512)
         if data:
@@ -42,7 +41,7 @@ def test_listen(bind_ip="0.0.0.0", port=53, wait_s=8):
 
 
 def test_echo(bind_ip="0.0.0.0", port=53, wait_s=30):
-    # T2 — echo server. run nslookup from a pc and see if the pico gets it.
+    # T2: echo server. Run nslookup from a PC and see if the Pico gets it.
     # if nothing shows up, it's AP isolation or wrong IP, not the firmware.
     _log("T2", "starting echo server on {}:{} for {}s".format(
         bind_ip, port, wait_s))
@@ -72,11 +71,11 @@ def test_echo(bind_ip="0.0.0.0", port=53, wait_s=30):
         except Exception as e:
             _log("T2", "sendto FAIL: {}".format(e))
     s.close()
-    _log("T2", "done. echoed {} packets".format(echoed))
+    _log("T2", "Done. Echoed {} packets".format(echoed))
 
 
 def test_upstream(host="1.1.1.1", port=53, timeout_s=5):
-    # T3 — send a real query to 1.1.1.1. if this fails, the router is
+    # T3: send a real query to 1.1.1.1. If this fails, the router is
     # blocking outbound DNS to public resolvers.
     # Hand-crafted DNS query for "cloudflare.com" A record.
     # Header: id=0x1234, RD=1, 1 question.
@@ -121,7 +120,7 @@ def test_upstream(host="1.1.1.1", port=53, timeout_s=5):
 
 
 def test_forward(pico_ip, peer_hint=None, wait_s=20):
-    # T4 — full forwarder. bind 53, recv, forward to 1.1.1.1, send answer back.
+    # T4: full forwarder. Bind 53, recv, forward to 1.1.1.1, send answer back.
     # uses select() on the upstream socket, same pattern as dns_monitor.
     # run nslookup from a pc during this, or pass peer_hint to self-probe.
     _log("T4", "starting forwarder on {}:53 for {}s".format(pico_ip, wait_s))
@@ -143,8 +142,7 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
     while time.ticks_diff(deadline, _now_ms()) > 0:
         now = _now_ms()
 
-        # Drain upstream responses.
-        if inflight:
+        # Drain upstream responses. If inflight:
             r, _, _ = select.select([up], [], [], 0)
             if r:
                 try:
@@ -162,8 +160,7 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
                             inflight.pop(i)
                             break
 
-        # Drop stale inflight.
-        i = 0
+        # Drop stale inflight. I = 0
         while i < len(inflight):
             if time.ticks_diff(now, inflight[i][2]) > 3000:
                 _log("T4", "drop stale txid=0x{:04x}".format(inflight[i][0]))
@@ -171,8 +168,7 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
             else:
                 i += 1
 
-        # Read new queries.
-        r, _, _ = select.select([s], [], [], 0)
+        # Read new queries. R, _, _ = select.select([s], [], [], 0)
         if r:
             try:
                 data, addr = s.recvfrom(512)
@@ -195,7 +191,7 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
 
     s.close()
     up.close()
-    _log("T4", "done. queries={} answered={}".format(queries, answered))
+    _log("T4", "Done. Queries={} answered={}".format(queries, answered))
     if queries == 0:
         _log("T4", "FAIL: never received a query - check AP isolation / IP")
     elif answered == 0:
@@ -205,8 +201,7 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
 
 
 def run(my_ip):
-    # run the full diagnostic. pass the pico's IP.
-    print("==== Known DNS diagnostic ====")
+    # Run the full diagnostic. Pass the Pico's IP. Print("==== Known DNS diagnostic ====")
     print("Pico IP: {}".format(my_ip))
     print()
 
@@ -214,7 +209,7 @@ def run(my_ip):
     data, addr = test_listen(wait_s=8)
     if data is None:
         print()
-        print("T1 failed. nothing else to do.")
+        print("T1 failed. Nothing else to do.")
         print("Things to try:")
         print("  - is the IP correct? nslookup from a PC should")
         print("    reach the Pico on UDP/53")
@@ -224,7 +219,7 @@ def run(my_ip):
 
     # T2: echo a real nslookup
     print()
-    print("T2: starting echo. from a PC on the same wifi, run:")
+    print("T2: starting echo. From a PC on the same WiFi, run:")
     print("    nslookup google.com {}".format(my_ip))
     print("    you have 30s.")
     test_echo(wait_s=30)
@@ -235,7 +230,7 @@ def run(my_ip):
 
     # T4: end-to-end (only useful if user runs nslookup during it)
     print()
-    print("T4: starting forwarder. from a PC on the same wifi, run:")
+    print("T4: starting forwarder. From a PC on the same WiFi, run:")
     print("    nslookup cloudflare.com {}".format(my_ip))
     print("    you have 20s.")
     test_forward(my_ip, wait_s=20)

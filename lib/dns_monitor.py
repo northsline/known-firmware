@@ -16,10 +16,8 @@ class DNSMonitor:
         self.dns_requests = []
         self.device_tracker = device_tracker
         self.last_error = None  # surfaced via /debug
-        # upstream socket, one per instance. non-blocking, polled in check_for_packets.
-        self.upstream = None
-        # in-flight: [txid, client_addr, sent_ms]. capped at _MAX_INFLIGHT.
-        self._inflight = []
+        # Upstream socket, one per instance. Non-blocking, polled in check_for_packets. Self.upstream = None
+        # In-flight: [txid, client_addr, sent_ms]. Capped at _MAX_INFLIGHT. Self._inflight = []
 
     def start_server(self):
         if self.sock:
@@ -57,8 +55,7 @@ class DNSMonitor:
             self.upstream = None
 
     def _drop_stale(self, now_ms):
-        # drop anything older than _INFLIGHT_TTL_MS. swap-pop, no alloc.
-        i = 0
+        # Drop anything older than _INFLIGHT_TTL_MS. Swap-pop, no alloc. I = 0
         n = len(self._inflight)
         while i < n:
             if time.ticks_diff(now_ms, self._inflight[i][2]) > _INFLIGHT_TTL_MS:
@@ -75,8 +72,7 @@ class DNSMonitor:
 
         now_ms = time.ticks_ms()
 
-        # 1. drain upstream responses. non-blocking.
-        if self.upstream is not None and self._inflight:
+        # 1. Drain upstream responses. Non-blocking. If self.upstream is not None and self._inflight:
             r, _, _ = select.select([self.upstream], [], [], 0)
             if r:
                 try:
@@ -107,11 +103,9 @@ class DNSMonitor:
                             self.last_error = "sendto client: {}".format(e)
                             print("Sendto client error: {}".format(e))
 
-        # 2. drop stale in-flight so a dead upstream response doesn't pin a slot.
-        self._drop_stale(now_ms)
+        # 2. Drop stale in-flight so a dead upstream response doesn't pin a slot. Self._drop_stale(now_ms)
 
-        # 3. poll listen socket. non-blocking, same as http server.
-        ready = select.select([self.sock], [], [], 0)
+        # 3. Poll listen socket. Non-blocking, same as HTTP server. Ready = select.select([self.sock], [], [], 0)
         if not ready[0]:
             return None
 
@@ -133,9 +127,8 @@ class DNSMonitor:
         else:
             print("[dns] _parse_domain FAILED for {}-byte packet".format(len(data)))
 
-        # fire-and-forget forward. never blocks. if upstream is busy or
-        # in-flight is full, we just log and move on.
-        self._forward_query(data, addr)
+        # Fire-and-forget forward. Never blocks. If upstream is busy or
+        # in-flight is full, we just log and move on. Self._forward_query(data, addr)
 
         if domain:
             entry = {
@@ -149,8 +142,7 @@ class DNSMonitor:
             if len(self.dns_requests) > _MAX_REQUESTS:
                 # Trim in place. List slice allocates a new list each call,
                 # but this only fires when the buffer is full, i.e. ~once
-                # per _MAX_REQUESTS packets.
-                self.dns_requests = self.dns_requests[-_MAX_REQUESTS:]
+                # per _MAX_REQUESTS packets. Self.dns_requests = self.dns_requests[-_MAX_REQUESTS:]
             if self.device_tracker:
                 self.device_tracker.record(
                     entry['source'], entry['domain'], entry['timestamp']
@@ -162,8 +154,7 @@ class DNSMonitor:
     def _forward_query(self, data, client_addr):
         if self.upstream is None or len(data) < 2:
             return
-        # Cap in-flight so a slow upstream doesn't grow the list unbounded.
-        if len(self._inflight) >= _MAX_INFLIGHT:
+        # Cap in-flight so a slow upstream doesn't grow the list unbounded. If len(self._inflight) >= _MAX_INFLIGHT:
             print("[dns] forward dropped: in-flight full ({})".format(_MAX_INFLIGHT))
             return
         txid = (data[0] << 8) | data[1]
@@ -173,8 +164,7 @@ class DNSMonitor:
             self.last_error = "upstream send: {}".format(e)
             print("Upstream send error: {}".format(e))
             return
-        # Append a small 3-tuple; no dict, no string formatting.
-        self._inflight.append([txid, client_addr, time.ticks_ms()])
+        # Append a small 3-tuple; no dict, no string formatting. Self._inflight.append([txid, client_addr, time.ticks_ms()])
 
     def _parse_domain(self, data):
         try:

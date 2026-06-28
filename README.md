@@ -5,8 +5,8 @@ them, forwards them to a real DNS server, and serves the logs over HTTP.
 
 ## Files
 
-- `main.py` — entry point, hardware control, main loop, OLED view
-- `lib/` — supporting modules (see lib/README.md for details)
+- `main.py`. Entry point, hardware control, main loop, OLED view
+- `lib/`. Supporting modules (see lib/README.md for details)
 
 ## Flash to Pico
 
@@ -14,7 +14,7 @@ them, forwards them to a real DNS server, and serves the logs over HTTP.
 2. Copy `main.py` and the `lib/` folder to the device
 
 For automated manufacturing (key generation, flashing, key burning, sticker
-printing), use `backend/flash_known.py` — it does all of this in one command.
+printing), use `backend/flash_known.py`. It does all of this in one command.
 
 ## Boot paths
 
@@ -65,14 +65,14 @@ on your network can't reach the Pico or DNS queries don't forward, check each on
 
 Some routers create separate subnets for 2.4 GHz and 5 GHz bands even when both
 share the same Wi-Fi name. The Pico connects on 2.4 GHz and your devices may
-connect on 5 GHz — they land on different subnets and can't talk to each other.
+connect on 5 GHz. They land on different subnets and can't talk to each other.
 
 **Symptom:** Pico gets an IP like `192.168.5.x` while your laptop gets
 `192.168.1.x`. `nslookup` from the laptop times out.
 
 **Fix:** Disable SSID separation (also called "Band Steering" or "Smart Connect"
 on some routers). Both bands should use one SSID and one subnet. On Vodafone
-Power Station this setting is called "Separazione SSID" — turn it off.
+Power Station this setting is called "Separazione SSID". Turn it off.
 
 ### 2. DNS Hijacking / "Secure DNS"
 
@@ -87,7 +87,7 @@ resolver, not from the Pico).
 **Fix:** Disable "DNS Sicuro" (Vodafone), "Secure DNS", "DNS Security", "DNS
 Hijacking Protection", or similarly-named features. Set the router's DNS to
 manual/static mode if available. Some routers also have a per-device "automatic
-DNS" toggle — disable it for devices that should query the Pico.
+DNS" toggle. Disable it for devices that should query the Pico.
 
 ### 3. AP / Client Isolation
 
@@ -109,9 +109,9 @@ The firmware includes `lib/dns_diag.py`. It runs four tests on the Pico:
 | Test | What it checks |
 |------|---------------|
 | T1   | Can the Pico receive UDP/53 at all? |
-| T2   | Echo server — run `nslookup` from a PC, see if it arrives |
+| T2   | Echo server: run `nslookup` from a PC, see if it arrives |
 | T3   | Can the Pico send upstream DNS to 1.1.1.1? |
-| T4   | End-to-end forwarder — query comes in, gets forwarded, answer comes back |
+| T4   | End-to-end forwarder: query comes in, gets forwarded, answer comes back |
 
 Run it with:
 

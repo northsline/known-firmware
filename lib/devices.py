@@ -1,15 +1,12 @@
-# device tracker — keeps a registry of LAN devices seen in dns queries.
-# keyed by source IP. reverse-dns lookup for friendly names, fallback to "Device #N".
-# trust_level and flagged_count are stubs for future heuristics.
-
-import socket
+# Device tracker: keeps a registry of LAN devices seen in DNS queries.
+# Keyed by source IP. Reverse-DNS lookup for friendly names, fallback to "Device #N".
+# trust_level and flagged_count are stubs for future heuristics. Import socket
 import time
 
 
 def _try_reverse_dns(ip):
-    # best-effort reverse dns. returns hostname or None.
-    # micropython might not have gethostbyaddr, so callers handle that.
-    try:
+    # Best-effort reverse DNS. Returns hostname or None.
+    # micropython might not have gethostbyaddr, so callers handle that. Try:
         name, _, _ = socket.gethostbyaddr(ip)
     except Exception:
         return None
@@ -26,8 +23,7 @@ class DeviceTracker:
     def record(self, ip, domain, timestamp):
         if ip not in self.devices:
             # Prefer a real hostname from reverse DNS if we can get one.
-            # Fall back to "Device #N" with a stable insertion-order number.
-            friendly = _try_reverse_dns(ip) or ("Device #" + str(self._next_id))
+            # Fall back to "Device #N" with a stable insertion-order number. Friendly = _try_reverse_dns(ip) or ("Device #" + str(self._next_id))
             self.devices[ip] = {
                 "id": str(hash(ip) & 0x7FFFFFFF),  # positive hash
                 "ip": ip,

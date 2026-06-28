@@ -1,10 +1,10 @@
-# lib/ecdsa.py — minimal ECDSA P-256 sign for MicroPython (RP2350)
+# lib/ecdsa.py: minimal ECDSA P-256 sign for MicroPython (RP2350)
 #
 # Pure Python. No C extension. No mbedTLS. ~150 lines.
-# Designed for one-time use during provisioning — takes 2-5 seconds
+# Designed for one-time use during provisioning: takes 2-5 seconds
 # on the RP2350, which is fine because the user is watching a spinner.
 #
-# Only implements sign() — verify happens in the browser via Web Crypto.
+# Only implements sign(): verify happens in the browser via Web Crypto.
 # Uses the Pico's TRNG (machine.rng) for the per-signature k.
 # Outputs DER-encoded signatures that Web Crypto's SubtleCrypto.verify accepts.
 #
@@ -103,12 +103,11 @@ def _der_encode_sig(r, s):
 
 def _rand_int(bits):
     # Generate a random integer from the Pico's TRNG.
-    # machine.rng() returns a 32-bit random number on the RP2 port.
-    try:
+    # machine.rng() returns a 32-bit random number on the RP2 port. Try:
         from machine import rng
     except ImportError:
         import os
-        # Fallback — os.urandom should work on RP2 as well
+        # Fallback: os.urandom should work on RP2 as well
         return int.from_bytes(os.urandom(bits // 8), 'big')
     n_bytes = bits // 8
     chunks = []

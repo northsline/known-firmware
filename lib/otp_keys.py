@@ -1,4 +1,4 @@
-# lib/otp_keys.py — device key storage for the RP2350
+# lib/otp_keys.py: device key storage for the RP2350
 #
 # The RP2350 has 8KB of one-time-programmable (OTP) memory.
 # Once a bit is set to 1, it cannot be cleared. This makes it ideal
@@ -11,15 +11,13 @@
 # (it lives in flash, not OTP) but works for development.
 #
 # Key layout in OTP (or fallback file):
-#   Offset 0:   32 bytes — ECDSA P-256 private key (raw, big-endian)
-#   Offset 32:  65 bytes — ECDSA P-256 public key (uncompressed, 0x04 || X || Y)
-#   Offset 96:  8 bytes  — device serial number (random, from manufacturing)
-#   Offset 104: 148 bytes — device certificate (DER-encoded, signed by root)
-#   Offset 252: 1 byte   — magic byte (0x01 = keys present)
+#   Offset 0:   32 bytes: ECDSA P-256 private key (raw, big-endian)
+#   Offset 32:  65 bytes: ECDSA P-256 public key (uncompressed, 0x04 || X || Y)
+#   Offset 96:  8 bytes : device serial number (random, from manufacturing)
+#   Offset 104: 148 bytes: device certificate (DER-encoded, signed by root)
+#   Offset 252: 1 byte  : magic byte (0x01 = keys present)
 #
-# Total: 253 bytes. Well within the 8KB OTP limit.
-
-import os
+# Total: 253 bytes. Well within the 8KB OTP limit. Import os
 
 _KEY_FILE = "/keys.bin"
 _MAGIC_OFFSET = 252
@@ -27,9 +25,7 @@ _MAGIC_VALUE = 0x01
 
 # Fallback: store keys in flash file. Used when OTP is not available
 # or during development. The file is written once during manufacturing
-# and read-only during normal operation.
-
-def _read_bytes(offset, length):
+# and read-only during normal operation. Def _read_bytes(offset, length):
     try:
         with open(_KEY_FILE, "rb") as f:
             f.seek(offset)
@@ -41,8 +37,7 @@ def _read_bytes(offset, length):
 def _write_bytes(offset, data):
     # Read existing file (or create empty), patch the bytes, write back.
     # This is only called during manufacturing. After that, the file
-    # is never written again.
-    try:
+    # is never written again. Try:
         with open(_KEY_FILE, "rb") as f:
             existing = bytearray(f.read())
     except OSError:
@@ -86,7 +81,7 @@ def get_certificate():
     """Return the DER-encoded device certificate as bytes, or None."""
     cert = _read_bytes(104, 148)
     if cert and len(cert) > 0:
-        # Trim trailing nulls — cert is variable length, padded to 148
+        # Trim trailing nulls: cert is variable length, padded to 148
         cert = cert.rstrip(b'\x00')
         if len(cert) > 0:
             return cert
