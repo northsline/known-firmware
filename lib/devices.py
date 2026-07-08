@@ -6,7 +6,8 @@ import time
 
 def _try_reverse_dns(ip):
     # Best-effort reverse DNS. Returns hostname or None.
-    # micropython might not have gethostbyaddr, so callers handle that. Try:
+    # micropython might not have gethostbyaddr, so callers handle that.
+    try:
         name, _, _ = socket.gethostbyaddr(ip)
     except Exception:
         return None
@@ -23,7 +24,8 @@ class DeviceTracker:
     def record(self, ip, domain, timestamp):
         if ip not in self.devices:
             # Prefer a real hostname from reverse DNS if we can get one.
-            # Fall back to "Device #N" with a stable insertion-order number. Friendly = _try_reverse_dns(ip) or ("Device #" + str(self._next_id))
+            # Fall back to "Device #N" with a stable insertion-order number.
+            friendly = _try_reverse_dns(ip) or ("Device #" + str(self._next_id))
             self.devices[ip] = {
                 "id": str(hash(ip) & 0x7FFFFFFF),  # positive hash
                 "ip": ip,
