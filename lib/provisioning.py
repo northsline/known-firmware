@@ -1,5 +1,6 @@
 # usb webserial provisioning: line-delimited json over usb cdc (115200 baud).
-# see the onboarding pwa for the host side. Import sys
+# see the onboarding pwa for the host side.
+import sys
 import json
 import time
 
@@ -21,7 +22,8 @@ def save_config(data):
 
 def _rand_hex(n=32):
     # Random hex string using machine.rng(): available on RP2 port.
-    # Falls back to ubinascii if rng is missing (should not happen on Pico 2 W). Try:
+    # Falls back to ubinascii if rng is missing (should not happen on Pico 2 W).
+    try:
         from machine import rng
         return "".join("{:02x}".format(rng()) for _ in range(n // 2 + 1))[:n]
     except Exception:
@@ -83,7 +85,8 @@ def _handle(line):
 
     if cmd == "identify":
         # Return device identity from OTP/key storage.
-        # No sticker code: the device proves itself via challenge-response. Try:
+        # No sticker code: the device proves itself via challenge-response.
+        try:
             import otp_keys
             serial = otp_keys.get_serial()
             has_keys = otp_keys.has_keys()
@@ -102,7 +105,8 @@ def _handle(line):
         # PWA sends a random nonce, device signs it with its private key.
         # PWA verifies the signature against the device public key
         # (extracted from the device certificate, which is signed by
-        # the Northsline root key embedded in the PWA). Nonce_hex = msg.get("nonce")
+        # the Northsline root key embedded in the PWA).
+        nonce_hex = msg.get("nonce")
         if not nonce_hex or not isinstance(nonce_hex, str):
             _send({"status": "error", "reason": "missing_nonce"})
             return False
@@ -147,13 +151,15 @@ def _handle(line):
 
     if cmd == "scan":
         # Return available WiFi networks as JSON so the PWA can show
-        # a dropdown instead of asking the user to type the SSID. Try:
+        # a dropdown instead of asking the user to type the SSID.
+        try:
             import network
             wlan = network.WLAN(network.STA_IF)
             wlan.active(True)
             nets = wlan.scan()
             # Each result: (ssid, bssid, channel, rssi, authmode, hidden)
-            # Cap at 15 to keep the payload small. Out = []
+            # Cap at 15 to keep the payload small.
+            out = []
             for n in nets[:15]:
                 try:
                     ssid = n[0].decode("utf-8", "ignore") if n[0] else ""
@@ -176,13 +182,15 @@ def _handle(line):
         # Return the connected AP's BSSID and the Pico's IP address.
         # Called by the PWA after provisioning to identify the router
         # vendor (OUI lookup on BSSID prefix) and show router-specific
-        # setup instructions. Try:
+        # setup instructions.
+        try:
             import network
             wlan = network.WLAN(network.STA_IF)
             if not wlan.isconnected():
                 # Freshly provisioned devices have not rebooted yet. Try to
                 # connect using the saved config so the PWA can read the
-                # AP's BSSID while still on USB. Cfg = load_config()
+                # AP's BSSID while still on USB.
+                cfg = load_config()
                 ssid = cfg.get("ssid")
                 pwd = cfg.get("pass")
                 if ssid and pwd is not None:

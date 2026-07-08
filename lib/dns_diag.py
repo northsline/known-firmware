@@ -8,7 +8,8 @@ def _now_ms():
 
 
 def _log(tag, msg):
-    # Tagged print so output is easy to grep. Print("[{}] {}".format(tag, msg))
+    # Tagged print so output is easy to grep.
+    print("[{}] {}".format(tag, msg))
 
 
 def test_listen(bind_ip="0.0.0.0", port=53, wait_s=8):
@@ -142,7 +143,8 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
     while time.ticks_diff(deadline, _now_ms()) > 0:
         now = _now_ms()
 
-        # Drain upstream responses. If inflight:
+        # Drain upstream responses.
+        if inflight:
             r, _, _ = select.select([up], [], [], 0)
             if r:
                 try:
@@ -160,7 +162,8 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
                             inflight.pop(i)
                             break
 
-        # Drop stale inflight. I = 0
+        # Drop stale inflight.
+        i = 0
         while i < len(inflight):
             if time.ticks_diff(now, inflight[i][2]) > 3000:
                 _log("T4", "drop stale txid=0x{:04x}".format(inflight[i][0]))
@@ -168,7 +171,8 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
             else:
                 i += 1
 
-        # Read new queries. R, _, _ = select.select([s], [], [], 0)
+        # Read new queries.
+        r, _, _ = select.select([s], [], [], 0)
         if r:
             try:
                 data, addr = s.recvfrom(512)
@@ -201,7 +205,8 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
 
 
 def run(my_ip):
-    # Run the full diagnostic. Pass the Pico's IP. Print("==== Known DNS diagnostic ====")
+    # Run the full diagnostic. Pass the Pico's IP.
+    print("==== Known DNS diagnostic ====")
     print("Pico IP: {}".format(my_ip))
     print()
 

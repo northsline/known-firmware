@@ -1,6 +1,7 @@
 # Device tracker: keeps a registry of LAN devices seen in DNS queries.
 # Keyed by source IP. Reverse-DNS lookup for friendly names, fallback to "Device #N".
-# trust_level and flagged_count are stubs for future heuristics. Import socket
+# trust_level and flagged_count are stubs for future heuristics.
+import socket
 import time
 
 

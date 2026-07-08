@@ -1,6 +1,7 @@
 # minimal non-blocking http server on port 8080.
 # raw sockets, no keep-alive, no threads: micropython safe.
-# poll() is called from the main loop, handles one connection per tick. Import socket
+# poll() is called from the main loop, handles one connection per tick.
+import socket
 import select
 import time
 
@@ -61,7 +62,8 @@ class HTTPServer:
             self.sock = None
 
     def poll(self):
-        # Accept and serve one pending connection. Never blocks. If not self.sock:
+        # Accept and serve one pending connection. Never blocks.
+        if not self.sock:
             return
 
         ready = select.select([self.sock], [], [], 0)
@@ -142,7 +144,8 @@ class HTTPServer:
         self._route(client, method, path, body)
 
     def _route(self, client, method, path, body):
-        # Strip query string for matching, keep it for parsing. Q = path.find("?")
+        # Strip query string for matching, keep it for parsing.
+        q = path.find("?")
         if q != -1:
             base = path[:q]
             query = path[q + 1:]
@@ -155,7 +158,8 @@ class HTTPServer:
         elif method == "GET" and base == "/token":
             # Expose the device token for future auth flows. Returns a
             # truncated hint: the full token is only sent over the
-            # local network, never exposed publicly. If self.device_token:
+            # local network, never exposed publicly.
+            if self.device_token:
                 self._send(client, 200, {
                     "status": "ok",
                     "token_hint": self.device_token[:8]
@@ -219,14 +223,16 @@ class HTTPServer:
                 "flagged": False,  # future heuristic detection
             })
 
-        # Cap to the most recent `limit` entries. If len(entries) > limit:
+        # Cap to the most recent `limit` entries.
+        if len(entries) > limit:
             entries = entries[-limit:]
 
         self._safe_send(client, 200, entries)
 
     def _stats(self, client):
         stats = self.device_tracker.get_stats()
-        # unique_domains is cheaper to compute here from the request log. Domains = {}
+        # unique_domains is cheaper to compute here from the request log.
+        domains = {}
         for r in self.dns_monitor.dns_requests:
             domains[r["domain"]] = True
         stats["unique_domains"] = len(domains)

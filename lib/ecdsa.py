@@ -103,7 +103,8 @@ def _der_encode_sig(r, s):
 
 def _rand_int(bits):
     # Generate a random integer from the Pico's TRNG.
-    # machine.rng() returns a 32-bit random number on the RP2 port. Try:
+    # machine.rng() returns a 32-bit random number on the RP2 port.
+    try:
         from machine import rng
     except ImportError:
         import os

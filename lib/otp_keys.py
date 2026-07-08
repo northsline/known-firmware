@@ -17,7 +17,8 @@
 #   Offset 104: 148 bytes: device certificate (DER-encoded, signed by root)
 #   Offset 252: 1 byte  : magic byte (0x01 = keys present)
 #
-# Total: 253 bytes. Well within the 8KB OTP limit. Import os
+# Total: 253 bytes. Well within the 8KB OTP limit.
+import os
 
 _KEY_FILE = "/keys.bin"
 _MAGIC_OFFSET = 252
@@ -25,7 +26,8 @@ _MAGIC_VALUE = 0x01
 
 # Fallback: store keys in flash file. Used when OTP is not available
 # or during development. The file is written once during manufacturing
-# and read-only during normal operation. Def _read_bytes(offset, length):
+# and read-only during normal operation.
+def _read_bytes(offset, length):
     try:
         with open(_KEY_FILE, "rb") as f:
             f.seek(offset)
@@ -37,7 +39,8 @@ _MAGIC_VALUE = 0x01
 def _write_bytes(offset, data):
     # Read existing file (or create empty), patch the bytes, write back.
     # This is only called during manufacturing. After that, the file
-    # is never written again. Try:
+    # is never written again.
+    try:
         with open(_KEY_FILE, "rb") as f:
             existing = bytearray(f.read())
     except OSError:
