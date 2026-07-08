@@ -1,6 +1,17 @@
 # minimal non-blocking http server on port 8080.
 # raw sockets, no keep-alive, no threads: micropython safe.
 # poll() is called from the main loop, handles one connection per tick.
+#
+# API fields (audit/weekly entries):
+#   source: str        -- client ip
+#   domain: str        -- parsed dns domain
+#   timestamp: float   -- epoch seconds
+#   flagged: bool      -- true if a heuristic matched
+#   kind: str          -- "flagged-domain" | "new-connection" | "normal"
+#   reason: str|null   -- why it was flagged (e.g. "matched: doubleclick.net")
+#
+# API fields (stats):
+#   flagged_count: int -- sum of flagged entries across all devices
 import socket
 import select
 import time
@@ -222,7 +233,9 @@ class HTTPServer:
                 "source": r["source"],
                 "domain": r["domain"],
                 "timestamp": r["timestamp"],
-                "flagged": False,  # future heuristic detection
+                "flagged": r.get("flagged", False),
+                "kind": r.get("kind", "normal"),
+                "reason": r.get("reason"),
             })
 
         # Cap to the most recent `limit` entries.
@@ -238,6 +251,7 @@ class HTTPServer:
         for r in self.dns_monitor.dns_requests:
             domains[r["domain"]] = True
         stats["unique_domains"] = len(domains)
+        stats["boot_time"] = self.dns_monitor.get_boot_time()
         self._safe_send(client, 200, stats)
 
     def _debug(self, client):

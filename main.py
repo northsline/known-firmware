@@ -449,6 +449,7 @@ def run():
     hw.device_tracker.load_saved_names()
 
     last_wifi_check = 0
+    last_flush_check = 0
     while True:
         now = time.ticks_ms()
 
@@ -460,6 +461,12 @@ def run():
 
         if hw.http:
             hw.http.poll()
+
+        # periodic flush to flash (internal gate handles actual writes)
+        if time.ticks_diff(now, last_flush_check) >= 300000:
+            if hw.dns_mon:
+                hw.dns_mon.maybe_flush()
+            last_flush_check = now
 
         # Build the small info dict the view needs. Done once per loop
         # pass; the view itself does not allocate on the hot path.

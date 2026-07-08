@@ -2,12 +2,61 @@ import socket
 import select
 import time
 
+try:
+    import json
+except ImportError:
+    import ujson as json
+
 _MAX_REQUESTS = 150
+_DNSLOG_PATH = '/dnslog.json'
+_FLUSH_INTERVAL_S = 300  # 5 minutes
+_FLUSH_THRESHOLD = 50   # entries since last flush
 UPSTREAM_DNS = "1.1.1.1"
 UPSTREAM_PORT = 53
 FORWARD_TIMEOUT = 3
 _MAX_INFLIGHT = 8
 _INFLIGHT_TTL_MS = 3000
+
+# flagged domains: known tracking/ad networks. match by suffix.
+# keep this under 50 entries for ram. pure domain strings, no wildcards.
+FLAGGED_DOMAINS = (
+    "doubleclick.net",
+    "googleadservices.com",
+    "googlesyndication.com",
+    "scorecardresearch.com",
+    "google-analytics.com",
+    "adservice.google.com",
+    "adsystem.amazon.com",
+    "analytics.apple.com",
+    "metrics.icloud.com",
+    "flurry.com",
+    "crashlytics.com",
+    "app-measurement.com",
+    "ads.yahoo.com",
+    "analytics.facebook.com",
+    "graph.facebook.com",
+    "connect.facebook.net",
+    "sc-static.net",
+    "criteo.com",
+    "criteo.net",
+    "advertising.com",
+    "quantserve.com",
+    "adsrvr.org",
+    "pubmatic.com",
+    "rubiconproject.com",
+    "openx.net",
+    "moatads.com",
+    "outbrain.com",
+    "taboola.com",
+    "disqus.com",
+    "branch.io",
+    "mixpanel.com",
+    "segment.io",
+    "amplitude.com",
+)
+
+# (ip, domain) pairs we've seen before. capped to avoid unbounded growth.
+_MAX_SEEN_PAIRS = 500
 
 
 class DNSMonitor:
@@ -20,6 +69,11 @@ class DNSMonitor:
         self.upstream = None
         # In-flight: [txid, client_addr, sent_ms]. Capped at _MAX_INFLIGHT.
         self._inflight = []
+        # persistence state
+        self._last_flush_s = time.time()
+        self._entries_since_flush = 0
+        self._boot_time = time.time()
+        self.load_persisted()
 
     def start_server(self):
         if self.sock:
@@ -138,23 +192,27 @@ class DNSMonitor:
         self._forward_query(data, addr)
 
         if domain:
+            flagged, kind, reason = self._classify(addr[0], domain)
             entry = {
                 'source': addr[0],
                 'domain': domain,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'flagged': flagged,
+                'kind': kind,
+                'reason': reason,
             }
             self.dns_requests.append(entry)
             print("[dns] appended entry, dns_requests len now {}".format(
                 len(self.dns_requests)))
             if len(self.dns_requests) > _MAX_REQUESTS:
-                # Trim in place. List slice allocates a new list each call,
-                # but this only fires when the buffer is full, i.e. ~once
-                # per _MAX_REQUESTS packets.
                 self.dns_requests = self.dns_requests[-_MAX_REQUESTS:]
             if self.device_tracker:
                 self.device_tracker.record(
-                    entry['source'], entry['domain'], entry['timestamp']
+                    entry['source'], entry['domain'], entry['timestamp'],
+                    flagged=flagged
                 )
+            self._entries_since_flush += 1
+            self._maybe_flush()
             return entry
 
         return None
@@ -193,3 +251,43 @@ class DNSMonitor:
 
     def get_recent_requests(self):
         return self.dns_requests[-_MAX_REQUESTS:]
+
+    def get_boot_time(self):
+        return self._boot_time
+
+    # --- persistence -------------------------------------------------------
+
+    def load_persisted(self):
+        try:
+            with open(_DNSLOG_PATH, 'r') as f:
+                raw = f.read()
+            data = json.loads(raw)
+            if isinstance(data, list):
+                self.dns_requests = data[-_MAX_REQUESTS:]
+                print("[dns] loaded {} persisted entries".format(len(self.dns_requests)))
+        except OSError:
+            # file doesn't exist — first boot or wiped flash
+            pass
+        except Exception as e:
+            print("[dns] load_persisted error: {}".format(e))
+
+    def _maybe_flush(self):
+        now = time.time()
+        if self._entries_since_flush >= _FLUSH_THRESHOLD or \
+                (now - self._last_flush_s) >= _FLUSH_INTERVAL_S:
+            self._flush()
+
+    def maybe_flush(self):
+        self._maybe_flush()
+
+    def _flush(self):
+        try:
+            entries = self.dns_requests[-_MAX_REQUESTS:]
+            with open(_DNSLOG_PATH, 'w') as f:
+                json.dump(entries, f)
+            self._last_flush_s = time.time()
+            self._entries_since_flush = 0
+            print("[dns] flushed {} entries to flash".format(len(entries)))
+        except Exception as e:
+            print("[dns] flush failed: {}".format(e))
+            self.last_error = "flush: {}".format(e)
