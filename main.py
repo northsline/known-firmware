@@ -445,6 +445,9 @@ def run():
     provisioning.ensure_device_token()
     hw.connect_to_wifi(cfg.get("ssid"), cfg.get("pass"))
 
+    # load saved device names from flash so they survive reboots.
+    hw.device_tracker.load_saved_names()
+
     last_wifi_check = 0
     while True:
         now = time.ticks_ms()

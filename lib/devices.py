@@ -10,6 +10,11 @@ try:
 except ImportError:  # running on cpython for tests
     ubinascii = None
 
+try:
+    import names_store
+except ImportError:
+    names_store = None
+
 
 def _try_reverse_dns(ip):
     # best-effort reverse dns. rarely works on micropython, kept as a long shot.
@@ -123,6 +128,19 @@ class DeviceTracker:
     def __init__(self):
         self.devices = {}  # key: ip string, value: dict
         self._next_id = 1  # monotonic, used for "device #n" fallback names
+        self._saved_names = {}  # ip -> custom name, loaded from flash on boot
+
+    def load_saved_names(self):
+        # load names from flash and apply to devices we already know about.
+        # called once on boot after wifi connects. devices that show up later
+        # in record() will check self._saved_names too.
+        if names_store is None:
+            return
+        self._saved_names = names_store.load_names()
+        for ip, name in self._saved_names.items():
+            if ip in self.devices:
+                self.devices[ip]["custom_name"] = name
+                self.devices[ip]["name"] = name
 
     def record(self, ip, domain, timestamp):
         if ip not in self.devices:
@@ -135,6 +153,11 @@ class DeviceTracker:
                 friendly = "Device #" + str(self._next_id)
             # mac: best effort, likely none on rp2350. exposed for oui lookup anyway.
             mac = _lookup_mac(ip)
+            # if we have a saved custom name for this ip, use it.
+            custom_name = None
+            if ip in self._saved_names:
+                custom_name = self._saved_names[ip]
+                friendly = custom_name
             self.devices[ip] = {
                 "id": str(hash(ip) & 0x7FFFFFFF),  # positive hash
                 "ip": ip,
@@ -145,6 +168,8 @@ class DeviceTracker:
                 "query_count": 0,
                 "flagged_count": 0,
             }
+            if custom_name is not None:
+                self.devices[ip]["custom_name"] = custom_name
             self._next_id += 1
         d = self.devices[ip]
         d["last_seen"] = timestamp
@@ -183,10 +208,14 @@ class DeviceTracker:
 
     def rename(self, ip, new_name):
         # set both the user-facing name and the persistent custom_name override.
-        # custom_name is in-memory only for now -- survives within a session.
+        # saves to flash so the name survives reboots.
         if ip in self.devices:
             self.devices[ip]["custom_name"] = new_name
             self.devices[ip]["name"] = new_name
+            if names_store is not None:
+                self._saved_names[ip] = new_name
+                if not names_store.save_names(self._saved_names):
+                    print("name save failed for", ip)
             return True
         return False
 
