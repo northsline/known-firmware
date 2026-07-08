@@ -44,6 +44,15 @@ class DeviceTracker:
     def get_all(self):
         return list(self.devices.values())
 
+    def rename(self, ip, new_name):
+        # set both the user-facing name and the persistent custom_name override.
+        # custom_name is in-memory only for now — survives within a session.
+        if ip in self.devices:
+            self.devices[ip]["custom_name"] = new_name
+            self.devices[ip]["name"] = new_name
+            return True
+        return False
+
     def get_stats(self):
         return {
             "total_queries": sum(d["query_count"] for d in self.devices.values()),
