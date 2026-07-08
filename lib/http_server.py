@@ -180,6 +180,8 @@ class HTTPServer:
             self._allowlist_add(client, body)
         elif method == "DELETE" and base.startswith("/allowlist/"):
             self._allowlist_delete(client, base[len("/allowlist/"):])
+        elif method == "PUT" and base.startswith("/devices/"):
+            self._device_rename(client, base[len("/devices/"):], body)
         else:
             self._send(client, 404, {"status": "error", "reason": "not found"})
 
@@ -275,6 +277,22 @@ class HTTPServer:
                 self._send(client, 200, {"status": "ok"})
                 return
         self._send(client, 404, {"status": "error", "reason": "not found"})
+
+    def _device_rename(self, client, device_id, body):
+        if not isinstance(body, dict) or "name" not in body:
+            self._send(client, 400, {"status": "error", "reason": "name required"})
+            return
+        new_name = str(body["name"]).strip()
+        if not new_name:
+            self._send(client, 400, {"status": "error", "reason": "name empty"})
+            return
+        # Find device by id (hash) or IP
+        for ip, d in self.device_tracker.devices.items():
+            if d["id"] == device_id or d["ip"] == device_id:
+                if self.device_tracker.rename(ip, new_name):
+                    self._send(client, 200, {"status": "ok"})
+                    return
+        self._send(client, 404, {"status": "error", "reason": "device not found"})
 
     # --- response helpers -------------------------------------------------
 
