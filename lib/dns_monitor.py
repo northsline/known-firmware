@@ -58,6 +58,12 @@ FLAGGED_DOMAINS = (
 # (ip, domain) pairs we've seen before. capped to avoid unbounded growth.
 _MAX_SEEN_PAIRS = 500
 
+# future heuristics not yet implemented:
+# - data-spike: requires byte counting, dns logger only sees queries not payloads
+# - night-activity: needs an rtc or ntp, pico has neither
+# - dns-hijack: needs to compare upstream responses against expected resolvers
+# - unknown-endpoint: needs ip resolution + allowlist comparison
+
 
 class DNSMonitor:
     def __init__(self, device_tracker=None):
@@ -69,11 +75,39 @@ class DNSMonitor:
         self.upstream = None
         # In-flight: [txid, client_addr, sent_ms]. Capped at _MAX_INFLIGHT.
         self._inflight = []
+        # seen (ip, domain) pairs for new-connection detection.
+        # dict key -> True. capped at _MAX_SEEN_PAIRS.
+        self._seen_pairs = {}
         # persistence state
         self._last_flush_s = time.time()
         self._entries_since_flush = 0
         self._boot_time = time.time()
         self.load_persisted()
+
+    def _classify(self, source_ip, domain):
+        # returns (flagged: bool, kind: str, reason: str|None)
+        # priority: flagged-domain > new-connection > normal
+
+        # 1. flagged domain suffix match
+        d = domain.lower()
+        for pattern in FLAGGED_DOMAINS:
+            if d == pattern or d.endswith("." + pattern):
+                return (True, "flagged-domain", "matched: " + pattern)
+
+        # 2. new-connection: first contact from this ip to this domain
+        pair = source_ip + "|" + d
+        if pair not in self._seen_pairs:
+            self._seen_pairs[pair] = True
+            # cap: if over limit, drop oldest entries (dict preserves insertion order)
+            if len(self._seen_pairs) > _MAX_SEEN_PAIRS:
+                drop = _MAX_SEEN_PAIRS // 10
+                keys = list(self._seen_pairs.keys())
+                for k in keys[:drop]:
+                    del self._seen_pairs[k]
+            return (True, "new-connection", None)
+
+        # 3. normal: seen this pair before
+        return (False, "normal", None)
 
     def start_server(self):
         if self.sock:

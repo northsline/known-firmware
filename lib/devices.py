@@ -142,7 +142,7 @@ class DeviceTracker:
                 self.devices[ip]["custom_name"] = name
                 self.devices[ip]["name"] = name
 
-    def record(self, ip, domain, timestamp):
+    def record(self, ip, domain, timestamp, flagged=False):
         if ip not in self.devices:
             # hostname: try reverse dns (usually fails), then nbns broadcast.
             # fall back to "device #n" with a stable insertion-order number.
@@ -184,7 +184,8 @@ class DeviceTracker:
             nb = _nbns_query_name(ip)
             if nb:
                 d["name"] = nb
-        # flagged_count stays 0 for the MVP (no heuristics yet)
+        if flagged:
+            d["flagged_count"] += 1
 
     def get_all(self):
         out = []
@@ -223,7 +224,7 @@ class DeviceTracker:
         return {
             "total_queries": sum(d["query_count"] for d in self.devices.values()),
             "unique_domains": 0,  # computed in http_server from dns_requests
-            "flagged_count": 0,
+            "flagged_count": sum(d["flagged_count"] for d in self.devices.values()),
             "device_count": len(self.devices),
             "period_start": min(
                 (d["first_seen"] for d in self.devices.values()), default=0
