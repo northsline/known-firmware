@@ -11,10 +11,15 @@ Supporting code for the Pico firmware. All run on MicroPython (RP2 port).
   (write WiFi credentials to /config.json). Emits `ready` beacon every ~2s.
 - `ecdsa.py`. Pure-MicroPython ECDSA P-256 signing with SHA-256 and DER
   encoding. ~150 lines, ~3s per signature on RP2350. No external deps.
-- `otp_keys.py`. Device key storage. Reads/writes /keys.bin (flash fallback
-  for OTP). Layout: private key (32B), public key (65B), serial (8B),
-  certificate (148B padded), magic byte. Functions: `has_keys()`,
-  `get_private_key_int()`, `get_serial()`, `get_certificate()`, `burn_keys()`.
+- `otp_keys.py`. Device key storage. Reads/writes RP2350 OTP (one-time-write).
+  Flash file at /keys.bin is a fallback for MicroPython builds without the
+  OTP API. Layout: private key (32B), public key (65B), serial (8B),
+  certificate (148B padded), magic byte. Total: 254 bytes, all within 8KB OTP.
+  Functions: `has_keys()`, `get_private_key_int()`, `get_serial()`,
+  `get_certificate()`, `burn_keys()`. The burn is atomic-by-construction:
+  data fields are written and read-back-verified first, the magic byte
+  (the commit signal) is written last. If read-back fails, the magic
+  byte is never set and the device is still recoverable.
 - `dns_monitor.py`. UDP DNS server on port 53. Receives queries, forwards
   to 1.1.1.1, logs them. Non-blocking, capped at 150 entries (ring buffer in
   RAM, zero flash writes). In-flight tracking with 8-slot cap and 3s TTL.
