@@ -293,6 +293,7 @@ class HTTPServer:
         self._send(client, 404, {"status": "error", "reason": "not found"})
 
     def _device_rename(self, client, device_id, body):
+        from devices import MAX_NAME_LEN
         if not isinstance(body, dict) or "name" not in body:
             self._send(client, 400, {"status": "error", "reason": "name required"})
             return
@@ -300,12 +301,19 @@ class HTTPServer:
         if not new_name:
             self._send(client, 400, {"status": "error", "reason": "name empty"})
             return
+        if len(new_name) > MAX_NAME_LEN:
+            self._send(client, 400, {"status": "error", "reason": "name too long"})
+            return
         # Find device by id (hash) or IP
         for ip, d in self.device_tracker.devices.items():
             if d["id"] == device_id or d["ip"] == device_id:
                 if self.device_tracker.rename(ip, new_name):
                     self._send(client, 200, {"status": "ok"})
                     return
+                # length check already passed, so rename failed because the
+                # device isn't in the tracker (race with eviction, etc).
+                self._send(client, 404, {"status": "error", "reason": "device not found"})
+                return
         self._send(client, 404, {"status": "error", "reason": "device not found"})
 
     # --- response helpers -------------------------------------------------

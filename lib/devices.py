@@ -124,6 +124,9 @@ def _lookup_mac(ip):
     return None
 
 
+MAX_NAME_LEN = 32
+
+
 class DeviceTracker:
     def __init__(self):
         self.devices = {}  # key: ip string, value: dict
@@ -210,15 +213,19 @@ class DeviceTracker:
     def rename(self, ip, new_name):
         # set both the user-facing name and the persistent custom_name override.
         # saves to flash so the name survives reboots.
-        if ip in self.devices:
-            self.devices[ip]["custom_name"] = new_name
-            self.devices[ip]["name"] = new_name
-            if names_store is not None:
-                self._saved_names[ip] = new_name
-                if not names_store.save_names(self._saved_names):
-                    print("name save failed for", ip)
-            return True
-        return False
+        if ip not in self.devices:
+            return False
+        # cap at MAX_NAME_LEN so a runaway client can't fill flash with a single
+        # rename. rejected names leave the device's existing name untouched.
+        if len(new_name) > MAX_NAME_LEN:
+            return False
+        self.devices[ip]["custom_name"] = new_name
+        self.devices[ip]["name"] = new_name
+        if names_store is not None:
+            self._saved_names[ip] = new_name
+            if not names_store.save_names(self._saved_names):
+                print("name save failed for", ip)
+        return True
 
     def get_stats(self):
         return {
