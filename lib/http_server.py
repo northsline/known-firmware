@@ -43,13 +43,17 @@ _STATUS_TEXT = {
 
 
 class HTTPServer:
-    def __init__(self, dns_monitor, device_tracker, port=8080, device_token=None):
+    def __init__(self, dns_monitor, device_tracker, port=8080, device_token=None, pico_mac=None):
         self.dns_monitor = dns_monitor
         self.device_tracker = device_tracker
         self.port = port
         self.sock = None
         self.allowlist = []
         self.device_token = device_token
+        # the pico's own mac (from wlan.config('mac')), formatted as
+        # "aa:bb:cc:dd:ee:ff" or None. exposed in /stats and /devices so
+        # the dashboard can run lookupVendor() on the known device.
+        self.pico_mac = pico_mac
 
     def start(self):
         if self.sock:
@@ -180,7 +184,18 @@ class HTTPServer:
         elif method == "GET" and base == "/audit/weekly":
             self._audit_weekly(client, query)
         elif method == "GET" and base == "/devices":
-            self._safe_send(client, 200, self.device_tracker.get_all())
+            # /devices is now a wrapper: {pico_mac, devices: [...]}.
+            # pico_mac is the known device's own mac (None if
+            # wlan.config('mac') isn't available). the per-device `mac`
+            # field on each entry is best-effort and stays None on
+            # rp2350 stock firmware (no ARP API). dashboard adapters are
+            # updated to read the wrapped shape; the old bare-array
+            # shape is still parsed transparently for back-compat.
+            payload = {
+                "pico_mac": self.pico_mac,
+                "devices": self.device_tracker.get_all(),
+            }
+            self._safe_send(client, 200, payload)
         elif method == "GET" and base == "/stats":
             self._stats(client)
         elif method == "GET" and base == "/debug":
@@ -252,6 +267,9 @@ class HTTPServer:
             domains[r["domain"]] = True
         stats["unique_domains"] = len(domains)
         stats["boot_time"] = self.dns_monitor.get_boot_time()
+        # pico_mac: the known device's own mac, for oui vendor lookup on
+        # the dashboard. None if wlan.config('mac') isn't available.
+        stats["pico_mac"] = self.pico_mac
         self._safe_send(client, 200, stats)
 
     def _debug(self, client):

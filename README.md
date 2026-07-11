@@ -33,8 +33,8 @@ printing), use `backend/flash_known.py`. It does all of this in one command.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /health | `{status: ok}` |
-| GET | /stats | Query count, device count, unique domains, flagged, period start |
-| GET | /devices | Per-device list with IP, name, query_count, first/last seen |
+| GET | /stats | Query count, device count, unique domains, flagged, period start, `pico_mac` (the Known device's own MAC for OUI lookup) |
+| GET | /devices | Wrapper `{pico_mac, devices: [...]}`. Per-device list with IP, name, query_count, first/last seen. Per-device `mac` is best-effort (None on RP2350). |
 | GET | /audit/weekly | Recent DNS log entries (source, domain, timestamp) |
 | GET | /debug | Raw internal state (DNS count, device dump, last error) |
 | GET | /token | Device token hint (first 8 chars) |
@@ -51,7 +51,7 @@ CORS `*`. No auth (LAN access only). Consumed by the dashboard and the `known` C
 - **Connecting:** SSID + "connecting"
 - **WiFi lost:** pulsing "WiFi Lost / Retrying..."
 - **Restarting:** spinner
-- **Unprovisioned:** setup hints ("Plug into PC / Open known.setup")
+- **Unprovisioned:** setup hints ("Plug into PC / Open known.local")
 
 Heartbeat dot blinks in the top-right corner on every screen.
 

@@ -47,7 +47,7 @@ def _show_provisioning_oled():
         # Four screens, one full rotation. Phases are tuples of
         # (line1, line2, line3): short strings, no allocation per frame.
         phases = [
-            ("Known",  "Plug into PC",   "Open known.setup"),
+            ("Known",  "Plug into PC",   "Open known.local"),
             ("Known",  "Setting up...",  " "),
             ("Known",  "Ready",          " "),
             ("Known",  "Waiting for you", " "),
@@ -154,7 +154,7 @@ class OledView:
         # Mirrors _show_provisioning_oled phases, just in case the view
         # is used directly without the pre-roll.
         phases = [
-            ("Known", "Plug into PC",  "Open known.setup"),
+            ("Known", "Plug into PC",  "Open known.local"),
             ("Known", "Setting up...", " "),
             ("Known", "Ready",         " "),
             ("Known", "Waiting for you", " "),
@@ -232,6 +232,7 @@ class KnownHardware:
         self.wlan = None
         self.ip_address = None
         self.was_connected = False
+        self.mac_address = None  # formatted "aa:bb:cc:dd:ee:ff" or None
         self.device_tracker = devices.DeviceTracker()
         self.dns_mon = None
         self.http = None
@@ -333,6 +334,14 @@ class KnownHardware:
                 self.ip_address = self.wlan.ifconfig()[0]
             print("WiFi connected. IP:", self.ip_address)
             self.was_connected = True
+            # read the pico's own mac from the cyw43 driver. the driver
+            # loaded the mac from OTP during init, so it's available as
+            # soon as the wlan interface is active. format as colon-
+            # separated hex so the dashboard's lookupVendor() can do an
+            # OUI match. on any failure (no wlan, bad bytes) leave
+            # self.mac_address as None -- the API exposes the field as
+            # null in that case.
+            self._read_pico_mac()
             self._start_mdns()
             self.view.set_state(OledView.S_ONLINE)
             self._start_dns_monitor()
@@ -383,9 +392,32 @@ class KnownHardware:
             import provisioning
             token = provisioning.load_config().get("device_token")
             self.http = http_server.HTTPServer(
-                self.dns_mon, self.device_tracker, port=8080, device_token=token
+                self.dns_mon, self.device_tracker, port=8080,
+                device_token=token, pico_mac=self.mac_address,
             )
         self.http.start()
+
+    def _read_pico_mac(self):
+        # pull the pico's own mac out of the cyw43 driver. wlan.config('mac')
+        # returns 6 raw bytes (set from OTP during cyw43_init, or LAA-
+        # generated if no OTP). format as "aa:bb:cc:dd:ee:ff" so the
+        # dashboard's oui.ts lookupVendor() can match. failures are non-
+        # fatal: leave self.mac_address as None and the API exposes null.
+        if not self.wlan:
+            return
+        try:
+            raw = self.wlan.config("mac")
+        except Exception as e:
+            print("pico mac read failed:", e)
+            return
+        if not raw:
+            return
+        try:
+            import devices
+            self.mac_address = devices.format_mac(raw)
+            print("Pico MAC:", self.mac_address)
+        except Exception as e:
+            print("pico mac format failed:", e)
 
 
 hw = None

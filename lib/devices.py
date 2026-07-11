@@ -16,6 +16,18 @@ except ImportError:
     names_store = None
 
 
+def format_mac(raw):
+    # format 6 raw bytes from wlan.config('mac') as colon-separated hex.
+    # returns "aa:bb:cc:dd:ee:ff" lowercase, or raises ValueError on bad input.
+    # the cyw43 driver exposes the pico's own mac as 6 bytes; this is what
+    # the dashboard's oui.ts lookupVendor() expects on the wire.
+    if not isinstance(raw, (bytes, bytearray)) or len(raw) != 6:
+        raise ValueError("mac must be 6 bytes, got {}".format(
+            type(raw).__name__ if not isinstance(raw, (bytes, bytearray)) else len(raw)
+        ))
+    return ":".join("{:02x}".format(b) for b in raw)
+
+
 def _try_reverse_dns(ip):
     # best-effort reverse dns. rarely works on micropython, kept as a long shot.
     try:
