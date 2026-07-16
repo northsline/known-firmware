@@ -206,7 +206,7 @@ def test_forward(pico_ip, peer_hint=None, wait_s=20):
 
 def run(my_ip):
     # Run the full diagnostic. Pass the Pico's IP.
-    print("==== Known DNS diagnostic ====")
+    print("==== Heron DNS diagnostic ====")
     print("Pico IP: {}".format(my_ip))
     print()
 

@@ -52,7 +52,7 @@ class HTTPServer:
         self.device_token = device_token
         # the pico's own mac (from wlan.config('mac')), formatted as
         # "aa:bb:cc:dd:ee:ff" or None. exposed in /stats and /devices so
-        # the dashboard can run lookupVendor() on the known device.
+        # the dashboard can run lookupVendor() on the heron device.
         self.pico_mac = pico_mac
 
     def start(self):
@@ -185,7 +185,7 @@ class HTTPServer:
             self._audit_weekly(client, query)
         elif method == "GET" and base == "/devices":
             # /devices is now a wrapper: {pico_mac, devices: [...]}.
-            # pico_mac is the known device's own mac (None if
+            # pico_mac is the heron device's own mac (None if
             # wlan.config('mac') isn't available). the per-device `mac`
             # field on each entry is best-effort and stays None on
             # rp2350 stock firmware (no ARP API). dashboard adapters are
@@ -267,7 +267,7 @@ class HTTPServer:
             domains[r["domain"]] = True
         stats["unique_domains"] = len(domains)
         stats["boot_time"] = self.dns_monitor.get_boot_time()
-        # pico_mac: the known device's own mac, for oui vendor lookup on
+        # pico_mac: the heron device's own mac, for oui vendor lookup on
         # the dashboard. None if wlan.config('mac') isn't available.
         stats["pico_mac"] = self.pico_mac
         self._safe_send(client, 200, stats)

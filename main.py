@@ -1,4 +1,4 @@
-# Known firmware: pico 2 w dns monitor
+# Heron firmware: pico 2 w dns monitor
 # listens on udp/53, logs queries, forwards to upstream.
 # oled shows query count, wifi status, uptime.
 import machine
@@ -10,7 +10,7 @@ BUZZER_PIN = 15
 
 OLED_MAX_CHARS = 16
 WIFI_TIMEOUT_S = 30
-MDNS_HOSTNAME = "known"
+MDNS_HOSTNAME = "heron"
 
 # OLED timing. All in ms; use ticks_ms/ticks_diff everywhere.
 OLED_CYCLE_MS = 3000            # how long each phase shows during normal operation
@@ -47,10 +47,10 @@ def _show_provisioning_oled():
         # Four screens, one full rotation. Phases are tuples of
         # (line1, line2, line3): short strings, no allocation per frame.
         phases = [
-            ("Known",  "Plug into PC",   "Open known.local"),
-            ("Known",  "Setting up...",  " "),
-            ("Known",  "Ready",          " "),
-            ("Known",  "Waiting for you", " "),
+            ("Heron",  "Plug into PC",   "Open heron.local"),
+            ("Heron",  "Setting up...",  " "),
+            ("Heron",  "Ready",          " "),
+            ("Heron",  "Waiting for you", " "),
         ]
         # Pre-slice to the OLED width so we do not truncate on every call.
         for i in range(len(phases)):
@@ -154,10 +154,10 @@ class OledView:
         # Mirrors _show_provisioning_oled phases, just in case the view
         # is used directly without the pre-roll.
         phases = [
-            ("Known", "Plug into PC",  "Open known.local"),
-            ("Known", "Setting up...", " "),
-            ("Known", "Ready",         " "),
-            ("Known", "Waiting for you", " "),
+            ("Heron", "Plug into PC",  "Open heron.local"),
+            ("Heron", "Setting up...", " "),
+            ("Heron", "Ready",         " "),
+            ("Heron", "Waiting for you", " "),
         ]
         i = self.phase % 4
         l1, l2, l3 = phases[i]
@@ -169,24 +169,24 @@ class OledView:
         # Two phases: "WiFi: <ssid>" then "Status: connecting".
         ssid = info.get("ssid", "")
         if (self.phase & 1) == 0:
-            self.oled.text("Known", 0, 0)
+            self.oled.text("Heron", 0, 0)
             self.oled.text("WiFi:", 0, 16)
             self.oled.text(ssid[:OLED_MAX_CHARS], 0, 32)
         else:
-            self.oled.text("Known", 0, 0)
+            self.oled.text("Heron", 0, 0)
             self.oled.text("WiFi...", 0, 16)
             self.oled.text("connecting", 0, 32)
 
     def _render_online(self, info, now_ms):
         # Two alternating screens.
-        # Phase 0: "Known / N queries / X KB"
-        # Phase 1: "Known / Wi-Fi: XX% / Uptime: Xh"
+        # Phase 0: "Heron / N queries / X KB"
+        # Phase 1: "Heron / Wi-Fi: XX% / Uptime: Xh"
         queries = info.get("queries", 0)
         kb = info.get("kb", 0)
         rssi = info.get("rssi", 0)
         uptime_h = (time.ticks_diff(now_ms, self.boot_ms) // 3600000)
         if (self.phase & 1) == 0:
-            self.oled.text("Known", 0, 0)
+            self.oled.text("Heron", 0, 0)
             self.oled.text(("Q: " + str(queries))[:OLED_MAX_CHARS], 0, 16)
             self.oled.text(self._format_kb(kb)[:OLED_MAX_CHARS], 0, 32)
         else:
@@ -196,7 +196,7 @@ class OledView:
                 pct = 0
             elif pct > 100:
                 pct = 100
-            self.oled.text("Known", 0, 0)
+            self.oled.text("Heron", 0, 0)
             self.oled.text(("Wi-Fi: " + str(pct) + "%")[:OLED_MAX_CHARS], 0, 16)
             self.oled.text(("Uptime: " + str(uptime_h) + "h")[:OLED_MAX_CHARS], 0, 32)
 
@@ -223,7 +223,7 @@ class KnownHardware:
         import devices
 
         self.pico_id = machine.unique_id()
-        print("Known Device ID:", self.pico_id.hex())
+        print("Heron Device ID:", self.pico_id.hex())
 
         self.oled = self._init_oled()
         self.buzzer = self._init_buzzer()
@@ -250,7 +250,7 @@ class KnownHardware:
                 print("OLED found at 0x3c. Initializing driver...")
                 oled = ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3C)
                 oled.fill(0)
-                oled.text("Known Online", 0, 0)
+                oled.text("Heron Online", 0, 0)
                 oled.show()
                 return oled
             print("OLED not detected on I2C Bus 1")
@@ -443,7 +443,7 @@ def run():
     # after Wi-Fi credentials exist so a partial lib/ copy cannot brick setup.
     import provisioning
 
-    print("Starting Known firmware...")
+    print("Starting Heron firmware...")
 
     if not provisioning.is_provisioned():
         # Show setup screen so user knows device is alive before serial

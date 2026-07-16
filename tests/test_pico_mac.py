@@ -8,7 +8,7 @@
 #   - /stats  as `pico_mac`
 #   - /devices response wrapper as `pico_mac` (the tracked devices list is
 #     nested under `devices` to keep the per-device `mac` field meaningful for
-#     the *tracked* devices, not the known device itself).
+#     the *tracked* devices, not the heron device itself).
 #
 # per-device mac on /devices remains best-effort (None on rp2350 stock
 # firmware: no ARP API). this is unchanged from the existing code.
@@ -63,7 +63,7 @@ def test_format_mac_wrong_length_raises():
 
 def test_stats_includes_pico_mac_field():
     # build a dns_monitor with no requests, a tracker with one device,
-    # and a known-hardware with a mac. the /stats response should expose
+    # and a heron-hardware with a mac. the /stats response should expose
     # the pico's own mac under `pico_mac`. we replicate what _stats()
     # does in the http_server, since capturing the wire payload from a
     # non-blocking socket is overkill for a unit test.

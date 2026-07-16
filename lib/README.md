@@ -1,4 +1,4 @@
-# Known Firmware Modules
+# Heron Firmware Modules
 
 Supporting code for the Pico firmware. All run on MicroPython (RP2 port).
 

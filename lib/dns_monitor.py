@@ -17,7 +17,7 @@ FORWARD_TIMEOUT = 3
 _MAX_INFLIGHT = 8
 _INFLIGHT_TTL_MS = 3000
 
-# flagged domains: known tracking/ad networks. match by suffix.
+# flagged domains: heron tracking/ad networks. match by suffix.
 # keep this under 50 entries for ram. pure domain strings, no wildcards.
 FLAGGED_DOMAINS = (
     "doubleclick.net",
