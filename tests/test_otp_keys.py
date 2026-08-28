@@ -24,18 +24,19 @@ def test_module_exposes_backend_constant():
 
 def test_layout_constants_match_design():
     # layout is part of the contract. if these move, every burned device is bricked.
-    assert otp_keys._PRIVATE_KEY_OFFSET == 0
+    # base offset is 2048 (row 0x2AA in RP2350 OTP customer space).
+    assert otp_keys._BASE_OFFSET == 4096
+    assert otp_keys._PRIVATE_KEY_OFFSET == 4096
     assert otp_keys._PRIVATE_KEY_LEN == 32
-    assert otp_keys._PUBLIC_KEY_OFFSET == 32
+    assert otp_keys._PUBLIC_KEY_OFFSET == 4096 + 32
     assert otp_keys._PUBLIC_KEY_LEN == 65
-    assert otp_keys._SERIAL_OFFSET == 97
+    assert otp_keys._SERIAL_OFFSET == 4096 + 97
     assert otp_keys._SERIAL_LEN == 8
-    assert otp_keys._CERT_OFFSET == 105
+    assert otp_keys._CERT_OFFSET == 4096 + 105
     assert otp_keys._CERT_LEN == 148
-    assert otp_keys._MAGIC_OFFSET == 253
+    assert otp_keys._MAGIC_OFFSET == 4096 + 253
     assert otp_keys._MAGIC_VALUE == 0x01
-    # total must be 254 bytes (253 data + 1 magic)
-    assert otp_keys._MAGIC_OFFSET + 1 == 254
+    assert otp_keys._MAGIC_OFFSET + 1 == 4096 + 254
 
 
 # --- has_keys ---
@@ -293,3 +294,140 @@ def test_burn_keys_returns_false_on_storage_error(monkeypatch):
         b'\xaa' * 8,
         b'\x30\x46' + b'\x42' * 70,
     ) is False
+
+
+# --- update key layout constants ---
+
+def test_update_key_layout_constants_match_design():
+    assert otp_keys._UPDATE_PUBLIC_KEY_OFFSET == 254
+    assert otp_keys._UPDATE_PUBLIC_KEY_LEN == 65
+    assert otp_keys._UPDATE_PUBLIC_KEY_HASH_OFFSET == 319
+    assert otp_keys._UPDATE_PUBLIC_KEY_HASH_LEN == 32
+    assert otp_keys._UPDATE_MAGIC_OFFSET == 351
+    assert otp_keys._UPDATE_MAGIC_VALUE == 0x01
+    assert otp_keys._UPDATE_ACTIVE_SLOT_OFFSET == 352
+    assert otp_keys._UPDATE_RESERVED_OFFSET == 353
+    assert otp_keys._UPDATE_RESERVED_LEN == 192
+    assert otp_keys._UPDATE_KEY_REGION_END == 545
+
+
+# --- has_update_key ---
+
+def test_has_update_key_false_when_magic_missing(monkeypatch):
+    monkeypatch.setattr(otp_keys, "_read_bytes",
+                        lambda off, n: b'\x00' if off == otp_keys._UPDATE_MAGIC_OFFSET else None)
+    assert otp_keys.has_update_key() is False
+
+
+def test_has_update_key_true_when_magic_set(monkeypatch):
+    monkeypatch.setattr(otp_keys, "_read_bytes",
+                        lambda off, n: bytes([otp_keys._UPDATE_MAGIC_VALUE])
+                        if off == otp_keys._UPDATE_MAGIC_OFFSET else None)
+    assert otp_keys.has_update_key() is True
+
+
+# --- get_update_pubkey / get_update_pubkey_hash / get_active_update_slot ---
+
+def test_get_update_pubkey_returns_65_bytes_after_burn():
+    dev_keys = {
+        "private_key": bytes(range(32)),
+        "public_key": b'\x04' + b'\x01' * 32 + b'\x02' * 32,
+        "serial": b'\xaa' * 8,
+        "certificate": b'\x30\x46' + b'\x42' * 70,
+    }
+    otp_keys.burn_keys(**dev_keys)
+    update_pub = b'\x04' + b'\x03' * 32 + b'\x04' * 32
+    assert otp_keys.burn_update_key(update_pub, active_slot=0) is True
+    out = otp_keys.get_update_pubkey()
+    assert out == update_pub
+    assert len(out) == 65
+
+
+def test_get_update_pubkey_hash_matches_sha256():
+    import hashlib
+    dev_keys = {
+        "private_key": bytes(range(32)),
+        "public_key": b'\x04' + b'\x01' * 32 + b'\x02' * 32,
+        "serial": b'\xaa' * 8,
+        "certificate": b'\x30\x46' + b'\x42' * 70,
+    }
+    otp_keys.burn_keys(**dev_keys)
+    update_pub = b'\x04' + b'\x05' * 32 + b'\x06' * 32
+    otp_keys.burn_update_key(update_pub, active_slot=1)
+    assert otp_keys.get_update_pubkey_hash() == hashlib.sha256(update_pub).digest()
+
+
+def test_get_active_update_slot_after_burn():
+    dev_keys = {
+        "private_key": bytes(range(32)),
+        "public_key": b'\x04' + b'\x01' * 32 + b'\x02' * 32,
+        "serial": b'\xaa' * 8,
+        "certificate": b'\x30\x46' + b'\x42' * 70,
+    }
+    otp_keys.burn_keys(**dev_keys)
+    otp_keys.burn_update_key(b'\x04' + b'\x07' * 32 + b'\x08' * 32, active_slot=2)
+    assert otp_keys.get_active_update_slot() == 2
+
+
+def test_get_update_pubkey_returns_none_for_missing_key(monkeypatch):
+    monkeypatch.setattr(otp_keys, "_read_bytes", lambda off, n: None)
+    assert otp_keys.get_update_pubkey() is None
+
+
+def test_get_update_pubkey_hash_returns_none_for_missing_key(monkeypatch):
+    monkeypatch.setattr(otp_keys, "_read_bytes", lambda off, n: None)
+    assert otp_keys.get_update_pubkey_hash() is None
+
+
+def test_get_active_update_slot_defaults_to_zero_when_missing(monkeypatch):
+    monkeypatch.setattr(otp_keys, "_read_bytes", lambda off, n: None)
+    assert otp_keys.get_active_update_slot() == 0
+
+
+# --- burn_update_key atomicity and validation ---
+
+def test_burn_update_key_atomicity_readback_matches():
+    dev_keys = {
+        "private_key": bytes(range(32)),
+        "public_key": b'\x04' + b'\x01' * 32 + b'\x02' * 32,
+        "serial": b'\xaa' * 8,
+        "certificate": b'\x30\x46' + b'\x42' * 70,
+    }
+    otp_keys.burn_keys(**dev_keys)
+    update_pub = b'\x04' + b'\x09' * 32 + b'\x0a' * 32
+    assert otp_keys.burn_update_key(update_pub, active_slot=3) is True
+    assert otp_keys.get_update_pubkey() == update_pub
+    assert otp_keys.get_active_update_slot() == 3
+    assert otp_keys.has_update_key() is True
+
+
+def test_burn_update_key_rejects_wrong_pubkey_length():
+    assert otp_keys.burn_update_key(b'\x04' + b'\x01' * 32) is False  # only 33 bytes
+
+
+def test_burn_update_key_rejects_non_uncompressed_point():
+    assert otp_keys.burn_update_key(b'\x02' + b'\x01' * 64) is False  # compressed indicator
+
+
+def test_burn_update_key_rejects_invalid_active_slot():
+    pub = b'\x04' + b'\x01' * 32 + b'\x02' * 32
+    assert otp_keys.burn_update_key(pub, active_slot=4) is False
+    assert otp_keys.burn_update_key(pub, active_slot=-1) is False
+
+
+def test_burn_update_key_aborts_on_readback_mismatch(monkeypatch):
+    def bad_read(off, n):
+        return b'\x00' * n
+    monkeypatch.setattr(otp_keys, "_write_bytes", lambda off, data: None)
+    monkeypatch.setattr(otp_keys, "_read_bytes", bad_read)
+    pub = b'\x04' + b'\x01' * 32 + b'\x02' * 32
+    assert otp_keys.burn_update_key(pub) is False
+    assert otp_keys.has_update_key() is False
+
+
+def test_burn_update_key_returns_false_on_storage_error(monkeypatch):
+    def raise_oserror(off, data):
+        raise OSError("OTP write failed")
+    monkeypatch.setattr(otp_keys, "_write_bytes", raise_oserror)
+    pub = b'\x04' + b'\x01' * 32 + b'\x02' * 32
+    assert otp_keys.burn_update_key(pub) is False

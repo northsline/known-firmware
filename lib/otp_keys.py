@@ -6,7 +6,29 @@
 #   offset 97    8 bytes  device serial number
 #   offset 105 148 bytes  device certificate (DER, null-padded)
 #   offset 253   1 byte   magic (0x01 = keys present)
-#   total: 254 bytes
+#   total device keys: 254 bytes
+#
+# update key layout (extends the device key region):
+#   offset 254  65 bytes  firmware update public key (uncompressed, 0x04 || X || Y)
+#   offset 319  32 bytes  SHA-256 of update public key (integrity check)
+#   offset 351   1 byte   update-key magic (0x01 = present)
+#   offset 352   1 byte   active key slot index (0..3, for rotation)
+#   offset 353 192 bytes  reserved (4 x 48 bytes for future key-hash slots)
+#   total update keys: 291 bytes (254..545)
+#   total storage: 545 bytes
+#
+# Layout constants for the update key region. These are part of the
+# contract — if they move, every burned device is bricked.
+_UPDATE_PUBLIC_KEY_OFFSET = 254
+_UPDATE_PUBLIC_KEY_LEN = 65
+_UPDATE_PUBLIC_KEY_HASH_OFFSET = 319
+_UPDATE_PUBLIC_KEY_HASH_LEN = 32
+_UPDATE_MAGIC_OFFSET = 351
+_UPDATE_MAGIC_VALUE = 0x01
+_UPDATE_ACTIVE_SLOT_OFFSET = 352
+_UPDATE_RESERVED_OFFSET = 353
+_UPDATE_RESERVED_LEN = 192
+_UPDATE_KEY_REGION_END = 545
 #
 # backend selection: at import time, try machine.OTP. if the RP2350 OTP
 # API is not available in the running MicroPython build, fall back to a
@@ -19,20 +41,32 @@
 # the magic byte is never set and burn_keys returns False. the device
 # can be re-attempted (OTP bits only go 0->1, so retrying a partial
 # write is safe).
+#
+# burn_update_key follows the same atomic pattern: the public key and
+# hash are written and verified first, then the magic byte is written
+# LAST. the active slot byte is written alongside the data fields (it
+# is not a commit signal -- the magic byte is).
+import hashlib
 import sys
 
 # --- layout constants. the on-device byte positions of every field.
 # these are part of the contract -- if they move, every burned device
 # is bricked. the test suite locks them.
-_PRIVATE_KEY_OFFSET = 0
+#
+# BASE_OFFSET: the RP2350 OTP customer data region has factory data in
+# rows 0x000-0x0ff (chip ID, boot keys, page locks). The writable customer
+# space starts at row 0x200 (logical byte 1536). We use 2048 (row 0x2AA)
+# as a clean base, well inside the safe region.
+_BASE_OFFSET = 4096
+_PRIVATE_KEY_OFFSET = _BASE_OFFSET + 0
 _PRIVATE_KEY_LEN = 32
-_PUBLIC_KEY_OFFSET = 32
+_PUBLIC_KEY_OFFSET = _BASE_OFFSET + 32
 _PUBLIC_KEY_LEN = 65
-_SERIAL_OFFSET = 97
+_SERIAL_OFFSET = _BASE_OFFSET + 97
 _SERIAL_LEN = 8
-_CERT_OFFSET = 105
+_CERT_OFFSET = _BASE_OFFSET + 105
 _CERT_LEN = 148
-_MAGIC_OFFSET = 253
+_MAGIC_OFFSET = _BASE_OFFSET + 253
 _MAGIC_VALUE = 0x01
 
 # flash fallback path
@@ -239,3 +273,108 @@ def burn_keys(private_key, public_key, serial, certificate):
         return False
 
     return True
+
+
+# --- public read API: update key ---
+
+def has_update_key():
+    magic = _read_bytes(_UPDATE_MAGIC_OFFSET, 1)
+    if magic is None or len(magic) != 1:
+        return False
+    return magic[0] == _UPDATE_MAGIC_VALUE
+
+
+def get_update_pubkey():
+    try:
+        pub = _read_bytes(_UPDATE_PUBLIC_KEY_OFFSET, _UPDATE_PUBLIC_KEY_LEN)
+    except Exception as e:
+        print("[otp_keys] get_update_pubkey failed:", e)
+        return None
+    if pub and len(pub) == _UPDATE_PUBLIC_KEY_LEN and pub[0] == 0x04:
+        return pub
+    return None
+
+
+def get_update_pubkey_hash():
+    try:
+        h = _read_bytes(_UPDATE_PUBLIC_KEY_HASH_OFFSET, _UPDATE_PUBLIC_KEY_HASH_LEN)
+    except Exception as e:
+        print("[otp_keys] get_update_pubkey_hash failed:", e)
+        return None
+    if h and len(h) == _UPDATE_PUBLIC_KEY_HASH_LEN:
+        return h
+    return None
+
+
+def get_active_update_slot():
+    try:
+        slot = _read_bytes(_UPDATE_ACTIVE_SLOT_OFFSET, 1)
+    except Exception as e:
+        print("[otp_keys] get_active_update_slot failed:", e)
+        return 0
+    if slot and len(slot) == 1 and slot[0] <= 3:
+        return slot[0]
+    return 0
+
+
+# --- public write API: burn_update_key ---
+
+def burn_update_key(public_key, active_slot=0):
+    """Burn the firmware-update public key into storage.
+
+    Args:
+        public_key: 65-byte uncompressed ECDSA P-256 public key (0x04 || X || Y).
+        active_slot: key slot index 0..3 for rotation. Defaults to 0.
+
+    Returns:
+        True on successful verified burn, False otherwise.
+    """
+    # 1. validate input lengths
+    if not isinstance(public_key, (bytes, bytearray)) or len(public_key) != _UPDATE_PUBLIC_KEY_LEN:
+        print("[otp_keys] burn_update_key: public key must be {} bytes".format(_UPDATE_PUBLIC_KEY_LEN))
+        return False
+    if public_key[0] != 0x04:
+        print("[otp_keys] burn_update_key: public key must be uncompressed (0x04 prefix)")
+        return False
+    if not isinstance(active_slot, int) or active_slot < 0 or active_slot > 3:
+        print("[otp_keys] burn_update_key: active_slot must be 0..3")
+        return False
+
+    # 2. compute and write the hash + public key + active slot.
+    # the active slot is not a commit signal; it can be written with the data.
+    key_hash = hashlib.sha256(bytes(public_key)).digest()
+    try:
+        _write_bytes(_UPDATE_PUBLIC_KEY_OFFSET, bytes(public_key))
+        _write_bytes(_UPDATE_PUBLIC_KEY_HASH_OFFSET, key_hash)
+        _write_bytes(_UPDATE_ACTIVE_SLOT_OFFSET, bytes([active_slot]))
+    except OSError as e:
+        print("[otp_keys] burn_update_key: write failed:", e)
+        return False
+
+    # 3. read-back verify
+    if not _verify_region(_UPDATE_PUBLIC_KEY_OFFSET, _UPDATE_PUBLIC_KEY_LEN, bytes(public_key)):
+        print("[otp_keys] burn_update_key: verify failed (public key)")
+        return False
+    if not _verify_region(_UPDATE_PUBLIC_KEY_HASH_OFFSET, _UPDATE_PUBLIC_KEY_HASH_LEN, key_hash):
+        print("[otp_keys] burn_update_key: verify failed (public key hash)")
+        return False
+    if not _verify_region(_UPDATE_ACTIVE_SLOT_OFFSET, 1, bytes([active_slot])):
+        print("[otp_keys] burn_update_key: verify failed (active slot)")
+        return False
+
+    # 4. commit: write the update-key magic byte
+    try:
+        _write_bytes(_UPDATE_MAGIC_OFFSET, bytes([_UPDATE_MAGIC_VALUE]))
+    except OSError as e:
+        print("[otp_keys] burn_update_key: magic write failed:", e)
+        return False
+
+    return True
+
+
+# --- compatibility helpers ---
+
+def get_total_storage_size():
+    """Return the total number of bytes used by the full storage layout.
+    Useful for bounds checks in manufacturing scripts."""
+    return _UPDATE_KEY_REGION_END
