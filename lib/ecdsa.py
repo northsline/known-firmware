@@ -1,10 +1,10 @@
-# lib/ecdsa.py: minimal ECDSA P-256 sign for MicroPython (RP2350)
+# lib/ecdsa.py: minimal ECDSA P-256 sign + verify for MicroPython (RP2350)
 #
-# Pure Python. No C extension. No mbedTLS. ~150 lines.
+# Pure Python. No C extension. No mbedTLS.
 # Designed for one-time use during provisioning: takes 2-5 seconds
 # on the RP2350, which is fine because the user is watching a spinner.
 #
-# Only implements sign(): verify happens in the browser via Web Crypto.
+# Implements sign() and verify() for ECDSA P-256 SHA-256.
 # Uses the Pico's TRNG (machine.rng) for the per-signature k.
 # Outputs DER-encoded signatures that Web Crypto's SubtleCrypto.verify accepts.
 #
@@ -99,6 +99,43 @@ def _der_encode_sig(r, s):
     return bytes([0x30, len(seq_content)]) + seq_content
 
 
+# --- DER decoding ---
+
+def _der_decode_sig(sig_der):
+    # Parse ASN.1 DER SEQUENCE { INTEGER r, INTEGER s }
+    # Returns (r, s) as integers, or raises ValueError on malformed input.
+    if len(sig_der) < 8:
+        raise ValueError("DER signature too short")
+    if sig_der[0] != 0x30:
+        raise ValueError("Expected SEQUENCE tag")
+    seq_len = sig_der[1]
+    if seq_len + 2 != len(sig_der):
+        raise ValueError("SEQUENCE length mismatch")
+    pos = 2
+    if sig_der[pos] != 0x02:
+        raise ValueError("Expected INTEGER tag for r")
+    pos += 1
+    r_len = sig_der[pos]
+    pos += 1
+    if pos + r_len > len(sig_der):
+        raise ValueError("r overflows signature")
+    r_bytes = sig_der[pos:pos + r_len]
+    pos += r_len
+    if sig_der[pos] != 0x02:
+        raise ValueError("Expected INTEGER tag for s")
+    pos += 1
+    s_len = sig_der[pos]
+    pos += 1
+    if pos + s_len != len(sig_der):
+        raise ValueError("s length mismatch")
+    s_bytes = sig_der[pos:pos + s_len]
+    r = int.from_bytes(r_bytes, 'big')
+    s = int.from_bytes(s_bytes, 'big')
+    if r < 1 or r >= N or s < 1 or s >= N:
+        raise ValueError("r or s out of range")
+    return r, s
+
+
 # --- Random k from TRNG ---
 
 def _rand_int(bits):
@@ -173,3 +210,45 @@ def public_key_bytes(private_key_int):
     x = point[0].to_bytes(32, 'big')
     y = point[1].to_bytes(32, 'big')
     return b'\x04' + x + y
+
+
+def verify(public_key_bytes, signature_der, message_bytes):
+    """Verify an ECDSA P-256 SHA-256 signature.
+
+    Args:
+        public_key_bytes: 65-byte uncompressed public key (0x04 || X || Y)
+        signature_der: DER-encoded signature (typically 70-72 bytes)
+        message_bytes: the raw message that was signed (will be SHA-256
+                       hashed internally)
+
+    Returns:
+        True if the signature is valid, False otherwise.
+    """
+    if len(public_key_bytes) != 65 or public_key_bytes[0] != 0x04:
+        return False
+
+    try:
+        r, s = _der_decode_sig(signature_der)
+    except (ValueError, IndexError):
+        return False
+
+    h = hashlib.sha256(message_bytes).digest()
+    z = int.from_bytes(h, 'big')
+
+    w = _inv_mod(s, N)
+    u1 = (z * w) % N
+    u2 = (r * w) % N
+
+    qx = int.from_bytes(public_key_bytes[1:33], 'big')
+    qy = int.from_bytes(public_key_bytes[33:65], 'big')
+    Q = (qx, qy)
+
+    p1 = _scalar_mult(u1, G)
+    p2 = _scalar_mult(u2, Q)
+    point = _point_add(p1, p2)
+
+    if point is None:
+        return False
+
+    v = point[0] % N
+    return v == r
