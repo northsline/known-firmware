@@ -208,6 +208,8 @@ class HTTPServer:
             self._allowlist_delete(client, base[len("/allowlist/"):])
         elif method == "PUT" and base.startswith("/devices/"):
             self._device_rename(client, base[len("/devices/"):], body)
+        elif method == "GET" and base == "/version":
+            self._version(client)
         else:
             self._send(client, 404, {"status": "error", "reason": "not found"})
 
@@ -333,6 +335,32 @@ class HTTPServer:
                 self._send(client, 404, {"status": "error", "reason": "device not found"})
                 return
         self._send(client, 404, {"status": "error", "reason": "device not found"})
+
+    def _version(self, client):
+        # Expose the current firmware version and update-key state.
+        try:
+            import json
+        except ImportError:
+            import ujson as json
+        try:
+            import otp_keys
+            has_update_key = otp_keys.has_update_key()
+            active_slot = otp_keys.get_active_update_slot()
+        except Exception:
+            has_update_key = False
+            active_slot = 0
+        fw_version = 1
+        try:
+            with open("/fwver.json", "r") as f:
+                ver = json.load(f)
+            fw_version = int(ver.get("fw_version", 1))
+        except Exception:
+            pass
+        self._safe_send(client, 200, {
+            "fw_version": fw_version,
+            "has_update_key": has_update_key,
+            "active_slot": active_slot,
+        })
 
     # --- response helpers -------------------------------------------------
 

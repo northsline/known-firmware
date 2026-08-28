@@ -436,8 +436,101 @@ def _draw_restart_screen(view, n_frames=4):
         time.sleep_ms(RESTART_SPINNER_MS)
 
 
+def _apply_pending_update():
+    # Boot shim: if a previous update staged .new files, commit them now
+    # before the rest of the firmware starts. This keeps the apply atomic:
+    # the old firmware runs until the rename succeeds, and the new firmware
+    # takes over on the next instruction.
+    #
+    # On MicroPython you cannot os.remove() a running .py file — the
+    # filesystem has it open. Instead we rename the old file to .old
+    # (harmless leftover) and then rename .new into place. If the second
+    # rename fails, we try to rename .old back so the device still boots.
+    import os
+    try:
+        import json
+    except ImportError:
+        import ujson as json
+
+    updated = False
+    try:
+        files = os.listdir("/")
+    except OSError:
+        files = []
+
+    for name in files:
+        if not name.endswith(".new"):
+            continue
+        target = name[:-4]
+        # Only commit lib/*.py files. main.py is overwritten directly
+        # during the USB update (MicroPython cannot rename a running
+        # main.py without crashing).
+        if not target.startswith("lib/"):
+            continue
+        old_name = target + ".old"
+        try:
+            # Move the current file aside (if it exists).
+            if target in files:
+                try:
+                    os.remove(old_name)
+                except OSError:
+                    pass
+                os.rename(target, old_name)
+            # Move the new file into place.
+            os.rename(name, target)
+            updated = True
+            print("[update] committed", target)
+            # Clean up the .old file if we can (non-fatal if it fails).
+            try:
+                os.remove(old_name)
+            except OSError:
+                pass
+        except OSError as e:
+            print("[update] failed to commit", target, e)
+            # Try to restore the old file so the device still boots.
+            try:
+                if old_name in os.listdir("/"):
+                    os.rename(old_name, target)
+            except OSError:
+                pass
+            return False
+
+    if updated:
+        try:
+            with open("/fwver.json", "r") as f:
+                ver = json.load(f)
+        except Exception:
+            ver = {}
+        ver["applied_at"] = int(time.time())
+        try:
+            with open("/fwver.json", "w") as f:
+                json.dump(ver, f)
+        except Exception as e:
+            print("[update] failed to update /fwver.json", e)
+    return updated
+
+
+def _load_fw_version():
+    # Default version for firmware predating the update system. A missing
+    # /fwver.json means version 1, so the first update bundle (min_from=1)
+    # can migrate such devices.
+    try:
+        import json
+    except ImportError:
+        import ujson as json
+    try:
+        with open("/fwver.json", "r") as f:
+            ver = json.load(f)
+        return int(ver.get("fw_version", 1))
+    except Exception:
+        return 1
+
+
 def run():
     global hw
+
+    # Commit any staged update before normal boot proceeds.
+    _apply_pending_update()
 
     # Only provisioning is required for first-time USB setup. Import the rest
     # after Wi-Fi credentials exist so a partial lib/ copy cannot brick setup.
